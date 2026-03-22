@@ -1,0 +1,18 @@
+name = "flowboard-worker"
+main = "index.js"
+compatibility_date = "2024-01-01"
+
+# KV namespace — create with: wrangler kv:namespace create BOARDS
+# Then paste the id below
+[[kv_namespaces]]
+binding = "BOARDS"
+id = "<BOARD_ID_HERE>"
+
+# For local dev: wrangler kv:namespace create BOARDS --preview
+# [[kv_namespaces]]
+# binding = "BOARDS"
+# id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+# preview_id = "REPLACE_WITH_YOUR_PREVIEW_KV_NAMESPACE_ID"
+
+#[limits]
+#cpu_ms = 50
