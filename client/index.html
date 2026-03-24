@@ -6,6 +6,7 @@
 <meta name="theme-color" content="#0a0a0f">
 <meta name="description" content="FlowBoard — Fast Kanban for focused teams">
 <title>FlowBoard</title>
+<link rel="icon" href="/icons/icon.ico" type="image/x-icon" />
 <link rel="manifest" href="manifest.json">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
@@ -176,7 +177,7 @@ body {
 .column {
   flex: 0 0 var(--col-w); display: flex; flex-direction: column;
   background: var(--surface); border-radius: var(--radius-lg);
-  border: 1px solid var(--border); max-height: 100%;
+  border: 1px solid var(--border); max-height: 100%; max-width: 280px;
   transition: border-color 0.15s;
 }
 .column.drag-over { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
