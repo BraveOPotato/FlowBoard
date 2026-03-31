@@ -19,7 +19,7 @@ const CARD_COLORS = [
   { name: 'teal', value: '#14b8a6' },
 ];
 // Set this to your deployed Cloudflare Worker URL
-const WORKER_URL = '<WORKER_URL>';
+const WORKER_URL = 'https://flowboard-worker.abdullahalkafajy.workers.dev';
 
 // ═══════════════════════════════════════════════════════
 // STATE
@@ -186,6 +186,47 @@ async function hashKey(boardId, password) {
 }
 
 // ═══════════════════════════════════════════════════════
+// AES-GCM ENCRYPTION
+// ═══════════════════════════════════════════════════════
+async function deriveEncKey(boardId, password) {
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']
+  );
+  const salt = new TextEncoder().encode(`flowboard:${boardId}`);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
+    keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+async function encryptData(boardId, password, data) {
+  const key = await deriveEncKey(boardId, password);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encoded = new TextEncoder().encode(JSON.stringify(data));
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
+  // Pack as base64(iv) + '.' + base64(ciphertext)
+  const toB64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  return { enc: 1, iv: toB64(iv), ct: toB64(ciphertext) };
+}
+
+async function decryptData(boardId, password, payload) {
+  if (!payload?.enc) return payload; // legacy plaintext
+  const key = await deriveEncKey(boardId, password);
+  const fromB64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+  const iv = fromB64(payload.iv);
+  const ct = fromB64(payload.ct);
+  try {
+    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+    return JSON.parse(new TextDecoder().decode(plain));
+  } catch {
+    throw new Error('Decryption failed — wrong password?');
+  }
+}
+
+// ═══════════════════════════════════════════════════════
 // BOARD CREDENTIALS (per-board IDB store)
 // ═══════════════════════════════════════════════════════
 async function getBoardCreds(boardId) {
@@ -214,13 +255,14 @@ function checkServer() {}       // no-op shim
 async function pushBoardToWorker(boardId) {
   const creds = await getBoardCreds(boardId);
   if (!creds) return false;
-  const data = {
+  const plainData = {
     boards:   state.boards.filter(b => b.id === boardId),
     columns:  state.columns.filter(c => c.boardId === boardId),
     cards:    state.cards.filter(c => c.boardId === boardId),
     activity: state.activity.filter(a => a.boardId === boardId),
   };
   try {
+    const data = await encryptData(boardId, creds.password, plainData);
     const r = await fetch(`${workerUrl()}/api/board/put`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -254,9 +296,10 @@ async function pullBoardFromWorker(boardId) {
       signal: AbortSignal.timeout(8000),
     });
     if (!r.ok) { setWorkerStatus(false); return false; }
-    const { found, data } = await r.json();
+    const { found, data: rawData } = await r.json();
     if (!found) { setWorkerStatus(true); return false; } // reached worker, board just not found
 
+    const data = await decryptData(boardId, creds.password, rawData);
     for (const b of data.boards  || []) { await dbPut('boards',   b); upsertInState('boards',   b, 'id'); }
     for (const c of data.columns || []) { await dbPut('columns',  c); upsertInState('columns',  c, 'id'); }
     for (const c of data.cards   || []) { await dbPut('cards',    c); upsertInState('cards',    c, 'id'); }
@@ -388,7 +431,6 @@ async function renameBoard(id, name) {
 }
 
 async function deleteBoard(id) {
-  if (state.boards.length <= 1) { toast('Cannot delete last board', '⚠'); return; }
   state.boards = state.boards.filter(b => b.id !== id);
   await dbDelete('boards', id);
   // Delete all columns and cards of this board
@@ -398,14 +440,33 @@ async function deleteBoard(id) {
   for (const c of cards) { state.cards = state.cards.filter(x => x.id !== c.id); await dbDelete('cards', c.id); }
   syncToServer('deleteBoard', { id });
   if (state.activeBoardId === id) {
-    await setActiveBoard(state.boards[0]?.id);
+    await setActiveBoard(state.boards[0]?.id || null);
   }
+  // Delete credentials too
+  await dbDelete('boardCreds', id);
   renderAll();
 }
 
 async function setActiveBoard(id) {
   state.activeBoardId = id;
   await dbPut('settings', { key: 'activeBoardId', value: id });
+}
+
+// Change board password: re-hash key, re-encrypt, push to cloud under new key
+async function changeBoardPassword(boardId, oldPassword, newPassword) {
+  const creds = await getBoardCreds(boardId);
+  if (!creds) throw new Error('Board credentials not found');
+  // Verify old password by checking it matches stored
+  const expectedOldHash = await hashKey(boardId, oldPassword);
+  if (expectedOldHash !== creds.keyHash) throw new Error('Current password is incorrect');
+  const newKeyHash = await hashKey(boardId, newPassword);
+  // Update local creds
+  const newCreds = { ...creds, password: newPassword, keyHash: newKeyHash };
+  await dbPut('boardCreds', newCreds);
+  // Delete old key from KV by pushing empty signal? No — just push under new key
+  // We can't delete old key without a delete endpoint, so we just write new key
+  await pushBoardToWorker(boardId); // uses updated creds from IDB
+  return true;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1583,7 +1644,9 @@ async function openSettingsModal() {
     <div class="board-cred-row" data-board-id="${escHtml(c.boardId)}">
       <span class="board-cred-name">${escHtml(c.name || c.boardId)}</span>
       <span style="font-size:10px;color:var(--text3);font-family:var(--font-mono)">${c.lastSynced ? 'synced ' + new Date(c.lastSynced).toLocaleDateString() : 'never synced'}</span>
+      <span style="font-size:10px;color:var(--green);font-family:var(--font-mono);padding:1px 6px;background:rgba(34,197,94,0.1);border-radius:4px">🔒 encrypted</span>
       <button class="btn btn-secondary" style="padding:3px 8px;font-size:11px" data-invite="${escHtml(c.boardId)}">🔗 Invite</button>
+      <button class="btn btn-secondary" style="padding:3px 8px;font-size:11px" data-change-pw="${escHtml(c.boardId)}">🔑 Change Password</button>
       <button class="btn btn-danger"    style="padding:3px 8px;font-size:11px" data-remove="${escHtml(c.boardId)}">✕</button>
     </div>
   `).join('') : '<p style="font-size:12px;color:var(--text3)">No synced boards yet.</p>';
@@ -1616,23 +1679,30 @@ async function openSettingsModal() {
       </div>
 
       <div class="settings-section">
-        <div class="settings-section-title">Join a Board</div>
-        <div class="form-row">
-          <div class="form-group">
-            <label class="form-label">Board ID</label>
-            <input class="form-input" id="join-board-id" placeholder="Paste board ID from invite link...">
-          </div>
-          <div class="form-group">
-            <label class="form-label">Password</label>
-            <input class="form-input" id="join-password" type="password" placeholder="Board password...">
-          </div>
-        </div>
-        <button class="btn btn-primary" id="join-board-btn" style="width:100%">Join Board</button>
-      </div>
-
-      <div class="settings-section">
         <div class="settings-section-title">Synced Boards</div>
         <div id="creds-list" style="display:flex;flex-direction:column;gap:8px">${credsRows}</div>
+      </div>
+
+      <div class="settings-section" style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+        <details>
+          <summary style="cursor:pointer;padding:12px 14px;font-size:12px;font-weight:600;letter-spacing:0.5px;color:var(--text2);list-style:none;display:flex;align-items:center;gap:8px;background:var(--bg3)">
+            <span>▸</span> ADVANCED
+          </summary>
+          <div style="padding:14px">
+            <div class="settings-section-title" style="margin-bottom:10px">Join a Board</div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Board ID</label>
+                <input class="form-input" id="join-board-id" placeholder="Paste board ID from invite link...">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Password</label>
+                <input class="form-input" id="join-password" type="password" placeholder="Board password...">
+              </div>
+            </div>
+            <button class="btn btn-primary" id="join-board-btn" style="width:100%">Join Board</button>
+          </div>
+        </details>
       </div>
 
       <div class="settings-section">
@@ -1695,10 +1765,16 @@ async function openSettingsModal() {
         signal: AbortSignal.timeout(8000),
       });
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      const { found, data } = await r.json();
+      const { found, data: rawPayload } = await r.json();
       if (!found) { toast('Board not found — check ID and password', '⚠'); btn.textContent = 'Join Board'; btn.disabled = false; return; }
 
-      // Import board data
+      // Decrypt board data
+      let data;
+      try {
+        data = await decryptData(boardId, pw, rawPayload);
+      } catch (decErr) {
+        toast('Wrong password or corrupted data', '⚠'); btn.textContent = 'Join Board'; btn.disabled = false; return;
+      }
       const boardName = data.boards?.[0]?.name || 'Imported Board';
       for (const b of data.boards  || []) { await dbPut('boards',   b); upsertInState('boards',   b, 'id'); }
       for (const c of data.columns || []) { await dbPut('columns',  c); upsertInState('columns',  c, 'id'); }
@@ -1719,9 +1795,7 @@ async function openSettingsModal() {
     }
   });
 
-  // Prefill boardId from invite link if present
-  const inviteId = new URLSearchParams(window.location.search).get('invite');
-  if (inviteId) modal.querySelector('#join-board-id').value = inviteId;
+  // (Invite links now handled by openInviteJoinModal — no prefill needed here)
 
   // Invite links
   modal.querySelectorAll('[data-invite]').forEach(btn => {
@@ -1731,6 +1805,14 @@ async function openSettingsModal() {
       const link = `${base}?invite=${encodeURIComponent(boardId)}`;
       navigator.clipboard?.writeText(link).catch(() => {});
       toast('Invite link copied! Share it — recipient enters the password to join.', '🔗');
+    });
+  });
+
+  // Change password
+  modal.querySelectorAll('[data-change-pw]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const boardId = btn.dataset.changePw;
+      openChangePwModal(boardId);
     });
   });
 
@@ -1769,6 +1851,126 @@ async function openSettingsModal() {
       toast('Imported successfully', '✓');
     } catch { toast('Invalid JSON file', '⚠'); }
   });
+}
+
+// ─── Change Board Password Modal ───
+function openChangePwModal(boardId) {
+  const board = state.boards.find(b => b.id === boardId);
+  const modal = openModal(`
+    <div class="modal">
+      <div class="modal-title">🔑 Change Password <button class="modal-close">✕</button></div>
+      <p style="font-size:12px;color:var(--text2);margin-bottom:14px">Changing the password re-encrypts your board in the cloud under a new key. Anyone with the old invite link will need the new password to sync.</p>
+      <div class="form-group">
+        <label class="form-label">Board</label>
+        <input class="form-input" value="${escHtml(board?.name || boardId)}" disabled>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Current Password</label>
+        <input class="form-input" id="cpw-old" type="password" placeholder="Current password...">
+      </div>
+      <div class="form-group">
+        <label class="form-label">New Password</label>
+        <input class="form-input" id="cpw-new" type="password" placeholder="New password...">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Confirm New Password</label>
+        <input class="form-input" id="cpw-confirm" type="password" placeholder="Confirm new password...">
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="cpw-cancel">Cancel</button>
+        <button class="btn btn-primary" id="cpw-save">Change Password</button>
+      </div>
+    </div>
+  `);
+  modal.querySelector('.modal-close').addEventListener('click', closeModal);
+  modal.querySelector('#cpw-cancel').addEventListener('click', closeModal);
+  modal.querySelector('#cpw-save').addEventListener('click', async () => {
+    const oldPw  = modal.querySelector('#cpw-old').value;
+    const newPw  = modal.querySelector('#cpw-new').value;
+    const confPw = modal.querySelector('#cpw-confirm').value;
+    if (!oldPw || !newPw) { toast('All fields required', '⚠'); return; }
+    if (newPw !== confPw) { toast('New passwords do not match', '⚠'); return; }
+    if (newPw === oldPw)  { toast('New password must differ from current', '⚠'); return; }
+    const btn = modal.querySelector('#cpw-save');
+    btn.textContent = 'Updating…'; btn.disabled = true;
+    try {
+      await changeBoardPassword(boardId, oldPw, newPw);
+      closeModal();
+      toast('Password changed and board re-encrypted in cloud ✓', '✓');
+    } catch (e) {
+      toast(e.message || 'Failed to change password', '⚠');
+      btn.textContent = 'Change Password'; btn.disabled = false;
+    }
+  });
+}
+
+// ─── Invite Join Modal (shown when arriving via ?invite=) ───
+function openInviteJoinModal(boardId) {
+  const modal = openModal(`
+    <div class="modal">
+      <div class="modal-title">🔗 Join Shared Board <button class="modal-close">✕</button></div>
+      <p style="font-size:12px;color:var(--text2);margin-bottom:14px">You've been invited to join a board. Enter the password the board owner shared with you.</p>
+      <div class="form-group">
+        <label class="form-label">Board ID</label>
+        <input class="form-input" id="invite-board-id" value="${escHtml(boardId)}" readonly style="opacity:0.6;font-family:var(--font-mono);font-size:11px">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Password</label>
+        <input class="form-input" id="invite-password" type="password" placeholder="Enter board password..." autofocus>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="invite-cancel">Cancel</button>
+        <button class="btn btn-primary" id="invite-join">Join Board</button>
+      </div>
+    </div>
+  `);
+  modal.querySelector('.modal-close').addEventListener('click', closeModal);
+  modal.querySelector('#invite-cancel').addEventListener('click', closeModal);
+
+  const doJoin = async () => {
+    const pw  = modal.querySelector('#invite-password').value;
+    if (!pw) { toast('Password required', '⚠'); return; }
+    const btn = modal.querySelector('#invite-join');
+    btn.textContent = 'Joining…'; btn.disabled = true;
+    const keyHash = await hashKey(boardId, pw);
+    try {
+      const r = await fetch(`${workerUrl()}/api/board/get`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ boardId, keyHash }),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const { found, data: rawPayload } = await r.json();
+      if (!found) { toast('Board not found — check the password', '⚠'); btn.textContent = 'Join Board'; btn.disabled = false; return; }
+      let data;
+      try { data = await decryptData(boardId, pw, rawPayload); }
+      catch { toast('Wrong password or corrupted data', '⚠'); btn.textContent = 'Join Board'; btn.disabled = false; return; }
+      const boardName = data.boards?.[0]?.name || 'Imported Board';
+      for (const b of data.boards   || []) { await dbPut('boards',   b); upsertInState('boards',   b, 'id'); }
+      for (const c of data.columns  || []) { await dbPut('columns',  c); upsertInState('columns',  c, 'id'); }
+      for (const c of data.cards    || []) { await dbPut('cards',    c); upsertInState('cards',    c, 'id'); }
+      for (const a of data.activity || []) { await dbPut('activity', a); upsertInState('activity', a, 'id'); }
+      state.boards.sort((a,b) => a.createdAt - b.createdAt);
+      state.columns.sort((a,b) => a.order - b.order);
+      state.cards.sort((a,b) => a.order - b.order);
+      await saveBoardCreds(boardId, pw, keyHash, boardName);
+      if (data.boards?.[0]) await setActiveBoard(data.boards[0].id);
+      // Clean up invite param from URL without reload
+      const url = new URL(window.location.href);
+      url.searchParams.delete('invite');
+      history.replaceState({}, '', url);
+      renderAll();
+      closeModal();
+      toast(`Joined "${boardName}" ✓`, '✓');
+    } catch (e) {
+      toast('Failed to join: ' + e.message, '⚠');
+      btn.textContent = 'Join Board'; btn.disabled = false;
+    }
+  };
+
+  modal.querySelector('#invite-join').addEventListener('click', doJoin);
+  modal.querySelector('#invite-password').addEventListener('keydown', e => { if (e.key === 'Enter') doJoin(); });
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2126,13 +2328,10 @@ async function init() {
     startSyncTimer();
   }
 
-  // Handle invite link (?invite=boardId) — open settings modal to join
+  // Handle invite link (?invite=boardId) — show dedicated password modal
   const inviteId = new URLSearchParams(window.location.search).get('invite');
   if (inviteId) {
-    setTimeout(() => {
-      openSettingsModal();
-      toast('Paste the board password to join the shared board', '🔗');
-    }, 400);
+    setTimeout(() => openInviteJoinModal(inviteId), 400);
   }
 }
 

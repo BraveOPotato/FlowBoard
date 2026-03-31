@@ -106,7 +106,7 @@ https://flowboard-worker.YOUR_SUBDOMAIN.workers.dev
 Open `client/app.js` and update the `WORKER_URL` constant near the top of the file:
 
 ```js
-const WORKER_URL = 'https://flowboard-worker.YOUR_SUBDOMAIN.workers.dev';
+const WORKER_URL = '<WORKER_URL>';
 ```
 
 Redeploy or re-serve the client after saving.
