@@ -19,7 +19,7 @@ const CARD_COLORS = [
   { name: 'teal', value: '#14b8a6' },
 ];
 // Set this to your deployed Cloudflare Worker URL
-const WORKER_URL = '<WORKER_URL>';
+const WORKER_URL = 'https://flowboard-worker.abdullahalkafajy.workers.dev';
 
 // ═══════════════════════════════════════════════════════
 // STATE
@@ -48,28 +48,27 @@ let state = {
 // THEMES
 // ═══════════════════════════════════════════════════════
 const THEMES = [
-  { id: 'void',      label: 'Void',      dark: true,  bg: '#0a0a0f', surface: '#1e1e2a', accent: '#6c63ff', accent2: '#8b85ff', dot2: '#a78bfa' },
-  { id: 'midnight',  label: 'Midnight',  dark: true,  bg: '#040812', surface: '#0f1e30', accent: '#3b82f6', accent2: '#60a5fa', dot2: '#818cf8' },
-  { id: 'forest',    label: 'Forest',    dark: true,  bg: '#050e08', surface: '#112118', accent: '#22c55e', accent2: '#4ade80', dot2: '#86efac' },
-  { id: 'ember',     label: 'Ember',     dark: true,  bg: '#0f0805', surface: '#261a0f', accent: '#f97316', accent2: '#fb923c', dot2: '#fbbf24' },
-  { id: 'rose',      label: 'Rose',      dark: true,  bg: '#0f0609', surface: '#251020', accent: '#ec4899', accent2: '#f472b6', dot2: '#c084fc' },
-  { id: 'arctic',    label: 'Arctic',    dark: true,  bg: '#050d10', surface: '#102028', accent: '#06b6d4', accent2: '#22d3ee', dot2: '#818cf8' },
-  { id: 'slate',     label: 'Slate',     dark: true,  bg: '#0a0a0a', surface: '#1e1e1e', accent: '#d4d4d4', accent2: '#e8e8e8', dot2: '#a3a3a3' },
-  { id: 'dracula',   label: 'Dracula',   dark: true,  bg: '#191a21', surface: '#2c2f3f', accent: '#bd93f9', accent2: '#caa9fa', dot2: '#ff79c6' },
-  { id: 'tokyo',     label: 'Tokyo Night',dark: true,  bg: '#0d0f17', surface: '#1e1f2e', accent: '#7aa2f7', accent2: '#89b4fa', dot2: '#bb9af7' },
-  { id: 'solarized', label: 'Solarized', dark: true,  bg: '#001b20', surface: '#08384a', accent: '#268bd2', accent2: '#2aa198', dot2: '#2aa198' },
-  { id: 'latte',     label: 'Latte',     dark: false, bg: '#f5f0e8', surface: '#ffffff', accent: '#7c5cbf', accent2: '#9575cd', dot2: '#9575cd' },
-  { id: 'sakura',    label: 'Sakura',    dark: false, bg: '#fff5f7', surface: '#ffffff', accent: '#e8446c', accent2: '#f06090', dot2: '#f472b6' },
+  // ── Dark ──
+  { id: 'void',      label: 'Void',        section: 'dark',  bg: '#0a0a0f', surface: '#1e1e2a', accent: '#8b85ff', accent2: '#a78bfa', dot3: '#6c63ff' },
+  { id: 'carbon',    label: 'Carbon',      section: 'dark',  bg: '#0d0f12', surface: '#1a1e2c', accent: '#38bdf8', accent2: '#7dd3fc', dot3: '#818cf8' },
+  { id: 'obsidian',  label: 'Obsidian',    section: 'dark',  bg: '#111010', surface: '#201d1a', accent: '#f59e0b', accent2: '#fbbf24', dot3: '#f97316' },
+  { id: 'noir',      label: 'Noir',        section: 'dark',  bg: '#080808', surface: '#161616', accent: '#e0e0e0', accent2: '#f5f5f5', dot3: '#a0a0a0' },
+  { id: 'dracula',   label: 'Dracula',     section: 'dark',  bg: '#191921', surface: '#2b2d3e', accent: '#bd93f9', accent2: '#caa9fa', dot3: '#ff79c6' },
+  { id: 'tokyo',     label: 'Tokyo Night', section: 'dark',  bg: '#0d0f17', surface: '#1e1f2e', accent: '#7aa2f7', accent2: '#89b4fa', dot3: '#bb9af7' },
+  { id: 'nord',      label: 'Nord',        section: 'dark',  bg: '#1a1f2e', surface: '#252b3b', accent: '#88c0d0', accent2: '#8fbcbb', dot3: '#81a1c1' },
+  { id: 'solarized', label: 'Solarized',   section: 'dark',  bg: '#001f26', surface: '#08384a', accent: '#268bd2', accent2: '#2aa198', dot3: '#859900' },
+  // ── Light ──
+  { id: 'snow',      label: 'Snow',        section: 'light', bg: '#f8fafc', surface: '#ffffff', accent: '#4f46e5', accent2: '#6366f1', dot3: '#7c3aed' },
+  { id: 'paper',     label: 'Paper',       section: 'light', bg: '#faf7f0', surface: '#ffffff', accent: '#c05820', accent2: '#d97030', dot3: '#b87800' },
+  { id: 'sage',      label: 'Sage',        section: 'light', bg: '#f4f6f2', surface: '#ffffff', accent: '#3d7a40', accent2: '#4e9452', dot3: '#2e7d32' },
 ];
 
 function applyTheme(id) {
   const theme = THEMES.find(t => t.id === id) || THEMES[0];
   document.documentElement.setAttribute('data-theme', theme.id);
-  // Update PWA theme-color meta tag
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.content = theme.bg;
   state.activeTheme = theme.id;
-  // Mark active swatch
   document.querySelectorAll('.theme-swatch').forEach(s => {
     s.classList.toggle('active', s.dataset.theme === theme.id);
   });
@@ -81,41 +80,63 @@ function saveTheme(id) {
 }
 
 function buildThemePanel() {
-  const grid = document.getElementById('theme-grid');
-  if (!grid) return;
-  grid.innerHTML = '';
-  for (const t of THEMES) {
-    const swatch = document.createElement('div');
-    swatch.className = 'theme-swatch' + (t.id === (state.activeTheme || 'void') ? ' active' : '');
-    swatch.dataset.theme = t.id;
-    swatch.title = t.label;
-    swatch.innerHTML = `
-      <div class="theme-swatch-dots">
-        <div class="theme-swatch-dot" style="background:${t.accent}"></div>
-        <div class="theme-swatch-dot" style="background:${t.accent2}"></div>
-        <div class="theme-swatch-dot" style="background:${t.dot2}"></div>
-      </div>
-      <div class="theme-swatch-bg" style="background:${t.surface};outline:1px solid rgba(128,128,128,0.2)"></div>
-      <div class="theme-swatch-bg" style="background:${t.bg}"></div>
-      <div class="theme-swatch-label">${t.label}</div>
-    `;
-    swatch.addEventListener('click', () => {
-      saveTheme(t.id);
-      toast(`Theme: ${t.label}`, '🎨');
-    });
-    grid.appendChild(swatch);
+  const container = document.getElementById('theme-grid');
+  if (!container) return;
+  container.innerHTML = '';
+
+  const sections = [
+    { key: 'dark',  label: 'Dark' },
+    { key: 'light', label: 'Light' },
+  ];
+
+  for (const sec of sections) {
+    const secThemes = THEMES.filter(t => t.section === sec.key);
+    if (!secThemes.length) continue;
+
+    const secLabel = document.createElement('div');
+    secLabel.className = 'theme-section-label';
+    secLabel.textContent = sec.label;
+    container.appendChild(secLabel);
+
+    const grid = document.createElement('div');
+    grid.className = 'theme-grid';
+
+    for (const t of secThemes) {
+      const swatch = document.createElement('div');
+      swatch.className = 'theme-swatch' + (t.id === (state.activeTheme || 'void') ? ' active' : '');
+      swatch.dataset.theme = t.id;
+      swatch.innerHTML = `
+        <div class="theme-swatch-dots">
+          <div class="theme-swatch-dot" style="background:${t.accent}"></div>
+          <div class="theme-swatch-dot" style="background:${t.accent2}"></div>
+          <div class="theme-swatch-dot" style="background:${t.dot3}"></div>
+        </div>
+        <span class="theme-swatch-label">${t.label}</span>
+        ${t.id === (state.activeTheme || 'void') ? '<span class="theme-swatch-sub">active</span>' : ''}
+      `;
+      swatch.addEventListener('click', () => {
+        saveTheme(t.id);
+        buildThemePanel(); // re-render to update active indicator
+        toast(`Theme: ${t.label}`, '🎨');
+      });
+      grid.appendChild(swatch);
+    }
+    container.appendChild(grid);
   }
 }
 
 function toggleThemePanel() {
   const panel = document.getElementById('theme-panel');
+  const overlay = document.getElementById('theme-overlay');
   const isOpen = panel.classList.contains('open');
   panel.classList.toggle('open', !isOpen);
+  overlay?.classList.toggle('open', !isOpen);
   if (!isOpen) buildThemePanel();
 }
 
 function closeThemePanel() {
   document.getElementById('theme-panel')?.classList.remove('open');
+  document.getElementById('theme-overlay')?.classList.remove('open');
 }
 
 
@@ -1354,9 +1375,9 @@ function renderCalendar() {
 
       cell.appendChild(chipsRow);
 
-      // Day-click opens the detail modal
+      // Day-click opens the detail modal — pass full dayEvents (all activity), not deduplicated dots
       const dateLabel = new Date(year, month, day).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
-      cell.addEventListener('click', () => openDayDetailModal(dateLabel, [...seenCards.values()], dueOnlyCards));
+      cell.addEventListener('click', () => openDayDetailModal(dateLabel, dayEvents, dayDueCards));
     }
 
     grid.appendChild(cell);
@@ -2149,9 +2170,11 @@ function bindEvents() {
     e.stopPropagation();
     toggleThemePanel();
   });
+  document.getElementById('theme-overlay')?.addEventListener('click', closeThemePanel);
   document.addEventListener('click', e => {
     if (!document.getElementById('theme-panel')?.contains(e.target) &&
-        e.target.id !== 'theme-btn') {
+        e.target.id !== 'theme-btn' &&
+        e.target.id !== 'theme-overlay') {
       closeThemePanel();
     }
   });
