@@ -2247,8 +2247,17 @@ function bindEvents() {
         <span class="da-icon" style="width:8px;height:8px;border-radius:50%;background:var(--accent);display:inline-block;flex-shrink:0"></span>
         <span class="da-label">${escHtml(board.name)}</span>
         ${isActive ? '<span class="da-badge">active</span>' : ''}
+        <span class="drawer-board-delete" data-id="${board.id}" title="Delete board" style="margin-left:auto;padding:2px 6px;border-radius:5px;color:var(--text3);font-size:14px;line-height:1;flex-shrink:0">✕</span>
       `;
-      btn.addEventListener('click', async () => {
+      btn.addEventListener('click', async e => {
+        if (e.target.closest('.drawer-board-delete')) {
+          e.stopPropagation();
+          if (confirm(`Delete board "${board.name}"?`)) {
+            await deleteBoard(board.id);
+            closeDrawer();
+          }
+          return;
+        }
         await setActiveBoard(board.id);
         renderAll();
         closeDrawer();
