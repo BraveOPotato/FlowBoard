@@ -14,27 +14,155 @@
 /* ===================== RESET & BASE ===================== */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* ===================== THEME DEFINITIONS ===================== */
+/* Each theme sets the palette vars. Structural vars live in :root below. */
+
+/* Default — Void (original dark purple) */
+:root, [data-theme="void"] {
+  --bg: #0a0a0f; --bg2: #111118; --bg3: #1a1a24; --bg4: #22222e;
+  --surface: #1e1e2a; --surface2: #282836;
+  --border: rgba(255,255,255,0.07); --border2: rgba(255,255,255,0.12);
+  --text: #e8e8f0; --text2: #9494a8; --text3: #5a5a70;
+  --accent: #6c63ff; --accent2: #8b85ff; --accent-glow: rgba(108,99,255,0.25);
+  --green: #22c55e; --red: #ef4444; --yellow: #f59e0b;
+  --cyan: #06b6d4; --pink: #ec4899; --orange: #f97316;
+  --logo-a: var(--accent2); --logo-b: #a78bfa;
+}
+
+/* Midnight — deep navy blue */
+[data-theme="midnight"] {
+  --bg: #040812; --bg2: #080f1e; --bg3: #0d1829; --bg4: #132034;
+  --surface: #0f1e30; --surface2: #162540;
+  --border: rgba(100,160,255,0.08); --border2: rgba(100,160,255,0.15);
+  --text: #dce8ff; --text2: #7a9ec4; --text3: #3a5878;
+  --accent: #3b82f6; --accent2: #60a5fa; --accent-glow: rgba(59,130,246,0.25);
+  --green: #34d399; --red: #f87171; --yellow: #fbbf24;
+  --cyan: #22d3ee; --pink: #f472b6; --orange: #fb923c;
+  --logo-a: #60a5fa; --logo-b: #818cf8;
+}
+
+/* Forest — deep green */
+[data-theme="forest"] {
+  --bg: #050e08; --bg2: #091410; --bg3: #0e1f17; --bg4: #142a1f;
+  --surface: #112118; --surface2: #192e22;
+  --border: rgba(100,220,140,0.07); --border2: rgba(100,220,140,0.13);
+  --text: #d4edda; --text2: #6faa80; --text3: #3a6048;
+  --accent: #22c55e; --accent2: #4ade80; --accent-glow: rgba(34,197,94,0.22);
+  --green: #86efac; --red: #f87171; --yellow: #fde047;
+  --cyan: #67e8f9; --pink: #f9a8d4; --orange: #fdba74;
+  --logo-a: #4ade80; --logo-b: #86efac;
+}
+
+/* Ember — warm dark brown/red */
+[data-theme="ember"] {
+  --bg: #0f0805; --bg2: #180f08; --bg3: #22160d; --bg4: #2d1f12;
+  --surface: #261a0f; --surface2: #332314;
+  --border: rgba(255,160,80,0.08); --border2: rgba(255,160,80,0.14);
+  --text: #f5e6d3; --text2: #b08060; --text3: #6b4c30;
+  --accent: #f97316; --accent2: #fb923c; --accent-glow: rgba(249,115,22,0.25);
+  --green: #86efac; --red: #fca5a5; --yellow: #fde68a;
+  --cyan: #67e8f9; --pink: #fda4af; --orange: #fdba74;
+  --logo-a: #fb923c; --logo-b: #fbbf24;
+}
+
+/* Rose — dark pink/magenta */
+[data-theme="rose"] {
+  --bg: #0f0609; --bg2: #180a10; --bg3: #220f18; --bg4: #2c1420;
+  --surface: #251020; --surface2: #33162b;
+  --border: rgba(244,114,182,0.08); --border2: rgba(244,114,182,0.14);
+  --text: #fce7f3; --text2: #b46a8a; --text3: #6b3a52;
+  --accent: #ec4899; --accent2: #f472b6; --accent-glow: rgba(236,72,153,0.25);
+  --green: #86efac; --red: #fca5a5; --yellow: #fde68a;
+  --cyan: #67e8f9; --pink: #f9a8d4; --orange: #fdba74;
+  --logo-a: #f472b6; --logo-b: #c084fc;
+}
+
+/* Arctic — icy teal/slate */
+[data-theme="arctic"] {
+  --bg: #050d10; --bg2: #091419; --bg3: #0e1e24; --bg4: #14272e;
+  --surface: #102028; --surface2: #172b34;
+  --border: rgba(103,232,249,0.07); --border2: rgba(103,232,249,0.13);
+  --text: #d0f4f8; --text2: #5fa8b8; --text3: #2e6070;
+  --accent: #06b6d4; --accent2: #22d3ee; --accent-glow: rgba(6,182,212,0.22);
+  --green: #34d399; --red: #f87171; --yellow: #fbbf24;
+  --cyan: #67e8f9; --pink: #f472b6; --orange: #fb923c;
+  --logo-a: #22d3ee; --logo-b: #818cf8;
+}
+
+/* Slate — neutral dark grey (minimal) */
+[data-theme="slate"] {
+  --bg: #0a0a0a; --bg2: #111111; --bg3: #1a1a1a; --bg4: #222222;
+  --surface: #1e1e1e; --surface2: #282828;
+  --border: rgba(255,255,255,0.06); --border2: rgba(255,255,255,0.11);
+  --text: #e8e8e8; --text2: #888888; --text3: #555555;
+  --accent: #d4d4d4; --accent2: #e8e8e8; --accent-glow: rgba(212,212,212,0.15);
+  --green: #86efac; --red: #f87171; --yellow: #fde047;
+  --cyan: #67e8f9; --pink: #f9a8d4; --orange: #fdba74;
+  --logo-a: #d4d4d4; --logo-b: #a3a3a3;
+}
+
+/* Latte — light / cream (light mode) */
+[data-theme="latte"] {
+  --bg: #f5f0e8; --bg2: #ede8e0; --bg3: #e4ddd4; --bg4: #d8d1c8;
+  --surface: #ffffff; --surface2: #f8f4ef;
+  --border: rgba(0,0,0,0.08); --border2: rgba(0,0,0,0.14);
+  --text: #1a1612; --text2: #6b5e52; --text3: #a89888;
+  --accent: #7c5cbf; --accent2: #9575cd; --accent-glow: rgba(124,92,191,0.18);
+  --green: #2e7d32; --red: #c62828; --yellow: #f57f17;
+  --cyan: #00838f; --pink: #ad1457; --orange: #e65100;
+  --logo-a: #7c5cbf; --logo-b: #9575cd;
+}
+
+/* Sakura — soft light pink (light mode) */
+[data-theme="sakura"] {
+  --bg: #fff5f7; --bg2: #fce8ed; --bg3: #f8d8e0; --bg4: #f2c8d4;
+  --surface: #ffffff; --surface2: #fef0f3;
+  --border: rgba(200,80,120,0.10); --border2: rgba(200,80,120,0.18);
+  --text: #2d1018; --text2: #8b4560; --text3: #c4859a;
+  --accent: #e8446c; --accent2: #f06090; --accent-glow: rgba(232,68,108,0.18);
+  --green: #2e7d32; --red: #c62828; --yellow: #e65100;
+  --cyan: #00838f; --pink: #ad1457; --orange: #e65100;
+  --logo-a: #e8446c; --logo-b: #f472b6;
+}
+
+/* Solarized — classic warm dark */
+[data-theme="solarized"] {
+  --bg: #001b20; --bg2: #012b36; --bg3: #073642; --bg4: #0d4555;
+  --surface: #08384a; --surface2: #0e4558;
+  --border: rgba(131,148,150,0.12); --border2: rgba(131,148,150,0.20);
+  --text: #fdf6e3; --text2: #839496; --text3: #4e6a6b;
+  --accent: #268bd2; --accent2: #2aa198; --accent-glow: rgba(38,139,210,0.25);
+  --green: #859900; --red: #dc322f; --yellow: #b58900;
+  --cyan: #2aa198; --pink: #d33682; --orange: #cb4b16;
+  --logo-a: #268bd2; --logo-b: #2aa198;
+}
+
+/* Dracula — classic purple dark */
+[data-theme="dracula"] {
+  --bg: #191a21; --bg2: #21222c; --bg3: #282a36; --bg4: #343746;
+  --surface: #2c2f3f; --surface2: #363a4f;
+  --border: rgba(189,147,249,0.10); --border2: rgba(189,147,249,0.18);
+  --text: #f8f8f2; --text2: #6272a4; --text3: #44475a;
+  --accent: #bd93f9; --accent2: #caa9fa; --accent-glow: rgba(189,147,249,0.25);
+  --green: #50fa7b; --red: #ff5555; --yellow: #f1fa8c;
+  --cyan: #8be9fd; --pink: #ff79c6; --orange: #ffb86c;
+  --logo-a: #bd93f9; --logo-b: #ff79c6;
+}
+
+/* Tokyo Night */
+[data-theme="tokyo"] {
+  --bg: #0d0f17; --bg2: #13151f; --bg3: #1a1b27; --bg4: #212234;
+  --surface: #1e1f2e; --surface2: #252639;
+  --border: rgba(122,162,247,0.09); --border2: rgba(122,162,247,0.16);
+  --text: #c0caf5; --text2: #565f89; --text3: #3b4261;
+  --accent: #7aa2f7; --accent2: #89b4fa; --accent-glow: rgba(122,162,247,0.25);
+  --green: #9ece6a; --red: #f7768e; --yellow: #e0af68;
+  --cyan: #7dcfff; --pink: #bb9af7; --orange: #ff9e64;
+  --logo-a: #7aa2f7; --logo-b: #bb9af7;
+}
+
+/* ===================== STRUCTURAL VARS (never change with theme) ===================== */
 :root {
-  --bg: #0a0a0f;
-  --bg2: #111118;
-  --bg3: #1a1a24;
-  --bg4: #22222e;
-  --surface: #1e1e2a;
-  --surface2: #282836;
-  --border: rgba(255,255,255,0.07);
-  --border2: rgba(255,255,255,0.12);
-  --text: #e8e8f0;
-  --text2: #9494a8;
-  --text3: #5a5a70;
-  --accent: #6c63ff;
-  --accent2: #8b85ff;
-  --accent-glow: rgba(108,99,255,0.25);
-  --green: #22c55e;
-  --red: #ef4444;
-  --yellow: #f59e0b;
-  --cyan: #06b6d4;
-  --pink: #ec4899;
-  --orange: #f97316;
   --radius: 10px;
   --radius-lg: 16px;
   --shadow: 0 4px 24px rgba(0,0,0,0.4);
@@ -46,6 +174,46 @@
   --backlog-h: 200px;
   --sidebar-w: 220px;
   --header-h: 52px;
+}
+
+/* ===================== THEME PICKER PANEL ===================== */
+#theme-panel {
+  position: fixed; top: calc(var(--header-h) + 6px); right: 8px;
+  z-index: 600; background: var(--bg2); border: 1px solid var(--border2);
+  border-radius: var(--radius-lg); padding: 14px 16px;
+  box-shadow: var(--shadow-lg); min-width: 280px;
+  display: none;
+}
+#theme-panel.open { display: block; }
+#theme-panel-title {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.6px;
+  text-transform: uppercase; color: var(--text3);
+  font-family: var(--font-mono); margin-bottom: 12px;
+}
+.theme-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+}
+.theme-swatch {
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+  padding: 8px 6px; border-radius: 9px; cursor: pointer;
+  border: 2px solid transparent;
+  transition: border-color 0.15s, background 0.15s;
+  background: var(--bg3);
+}
+.theme-swatch:hover { border-color: var(--border2); }
+.theme-swatch.active { border-color: var(--accent2); }
+.theme-swatch-dots {
+  display: flex; gap: 3px; align-items: center;
+}
+.theme-swatch-dot {
+  width: 10px; height: 10px; border-radius: 50%;
+}
+.theme-swatch-bg {
+  width: 100%; height: 6px; border-radius: 3px;
+}
+.theme-swatch-label {
+  font-size: 10px; color: var(--text2); font-family: var(--font-mono);
+  white-space: nowrap;
 }
 
 html, body { height: 100%; overflow: hidden; }
@@ -79,7 +247,7 @@ body {
 #logo {
   font-family: var(--font-display);
   font-weight: 800; font-size: 18px;
-  background: linear-gradient(135deg, var(--accent2), #a78bfa);
+  background: linear-gradient(135deg, var(--logo-a), var(--logo-b));
   -webkit-background-clip: text; -webkit-text-fill-color: transparent;
   background-clip: text; white-space: nowrap; letter-spacing: -0.5px;
 }
@@ -893,6 +1061,7 @@ body {
         <span id="server-status-text">local</span>
       </div>
       <button class="header-btn" id="sync-now-btn" title="Sync with server now" style="display:none;font-size:13px">↻</button>
+      <button class="header-btn" id="theme-btn" title="Switch theme">🎨</button>
       <button class="header-btn" id="settings-btn" title="Settings">⚙</button>
       <button class="header-btn" id="install-btn" title="Install as app" style="display:none">⬇</button>
     </div>
@@ -919,6 +1088,10 @@ body {
         <span class="da-icon">🔍</span>
         <span class="da-label">Search</span>
         <span class="da-badge">/</span>
+      </button>
+      <button class="drawer-action" id="drawer-theme-btn">
+        <span class="da-icon">🎨</span>
+        <span class="da-label">Switch Theme</span>
       </button>
       <button class="drawer-action" id="drawer-settings-btn">
         <span class="da-icon">⚙</span>
@@ -989,6 +1162,12 @@ body {
     </div>
     <div id="backlog-cards"></div>
   </div>
+</div>
+
+<!-- Theme Picker Panel -->
+<div id="theme-panel">
+  <div id="theme-panel-title">Choose Theme</div>
+  <div class="theme-grid" id="theme-grid"></div>
 </div>
 
 <!-- Toast Container -->

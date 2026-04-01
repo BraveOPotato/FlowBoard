@@ -19,7 +19,7 @@ const CARD_COLORS = [
   { name: 'teal', value: '#14b8a6' },
 ];
 // Set this to your deployed Cloudflare Worker URL
-const WORKER_URL = 'https://flowboard-worker.abdullahalkafajy.workers.dev';
+const WORKER_URL = '<WORKER_URL>';
 
 // ═══════════════════════════════════════════════════════
 // STATE
@@ -41,11 +41,84 @@ let state = {
   syncQueue: [],
   workerUrl: WORKER_URL,
   syncInterval: 600,  // default 10 minutes
+  activeTheme: 'void',
 };
 
 // ═══════════════════════════════════════════════════════
-// DB LAYER
+// THEMES
 // ═══════════════════════════════════════════════════════
+const THEMES = [
+  { id: 'void',      label: 'Void',      dark: true,  bg: '#0a0a0f', surface: '#1e1e2a', accent: '#6c63ff', accent2: '#8b85ff', dot2: '#a78bfa' },
+  { id: 'midnight',  label: 'Midnight',  dark: true,  bg: '#040812', surface: '#0f1e30', accent: '#3b82f6', accent2: '#60a5fa', dot2: '#818cf8' },
+  { id: 'forest',    label: 'Forest',    dark: true,  bg: '#050e08', surface: '#112118', accent: '#22c55e', accent2: '#4ade80', dot2: '#86efac' },
+  { id: 'ember',     label: 'Ember',     dark: true,  bg: '#0f0805', surface: '#261a0f', accent: '#f97316', accent2: '#fb923c', dot2: '#fbbf24' },
+  { id: 'rose',      label: 'Rose',      dark: true,  bg: '#0f0609', surface: '#251020', accent: '#ec4899', accent2: '#f472b6', dot2: '#c084fc' },
+  { id: 'arctic',    label: 'Arctic',    dark: true,  bg: '#050d10', surface: '#102028', accent: '#06b6d4', accent2: '#22d3ee', dot2: '#818cf8' },
+  { id: 'slate',     label: 'Slate',     dark: true,  bg: '#0a0a0a', surface: '#1e1e1e', accent: '#d4d4d4', accent2: '#e8e8e8', dot2: '#a3a3a3' },
+  { id: 'dracula',   label: 'Dracula',   dark: true,  bg: '#191a21', surface: '#2c2f3f', accent: '#bd93f9', accent2: '#caa9fa', dot2: '#ff79c6' },
+  { id: 'tokyo',     label: 'Tokyo Night',dark: true,  bg: '#0d0f17', surface: '#1e1f2e', accent: '#7aa2f7', accent2: '#89b4fa', dot2: '#bb9af7' },
+  { id: 'solarized', label: 'Solarized', dark: true,  bg: '#001b20', surface: '#08384a', accent: '#268bd2', accent2: '#2aa198', dot2: '#2aa198' },
+  { id: 'latte',     label: 'Latte',     dark: false, bg: '#f5f0e8', surface: '#ffffff', accent: '#7c5cbf', accent2: '#9575cd', dot2: '#9575cd' },
+  { id: 'sakura',    label: 'Sakura',    dark: false, bg: '#fff5f7', surface: '#ffffff', accent: '#e8446c', accent2: '#f06090', dot2: '#f472b6' },
+];
+
+function applyTheme(id) {
+  const theme = THEMES.find(t => t.id === id) || THEMES[0];
+  document.documentElement.setAttribute('data-theme', theme.id);
+  // Update PWA theme-color meta tag
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = theme.bg;
+  state.activeTheme = theme.id;
+  // Mark active swatch
+  document.querySelectorAll('.theme-swatch').forEach(s => {
+    s.classList.toggle('active', s.dataset.theme === theme.id);
+  });
+}
+
+function saveTheme(id) {
+  dbPut('settings', { key: 'activeTheme', value: id });
+  applyTheme(id);
+}
+
+function buildThemePanel() {
+  const grid = document.getElementById('theme-grid');
+  if (!grid) return;
+  grid.innerHTML = '';
+  for (const t of THEMES) {
+    const swatch = document.createElement('div');
+    swatch.className = 'theme-swatch' + (t.id === (state.activeTheme || 'void') ? ' active' : '');
+    swatch.dataset.theme = t.id;
+    swatch.title = t.label;
+    swatch.innerHTML = `
+      <div class="theme-swatch-dots">
+        <div class="theme-swatch-dot" style="background:${t.accent}"></div>
+        <div class="theme-swatch-dot" style="background:${t.accent2}"></div>
+        <div class="theme-swatch-dot" style="background:${t.dot2}"></div>
+      </div>
+      <div class="theme-swatch-bg" style="background:${t.surface};outline:1px solid rgba(128,128,128,0.2)"></div>
+      <div class="theme-swatch-bg" style="background:${t.bg}"></div>
+      <div class="theme-swatch-label">${t.label}</div>
+    `;
+    swatch.addEventListener('click', () => {
+      saveTheme(t.id);
+      toast(`Theme: ${t.label}`, '🎨');
+    });
+    grid.appendChild(swatch);
+  }
+}
+
+function toggleThemePanel() {
+  const panel = document.getElementById('theme-panel');
+  const isOpen = panel.classList.contains('open');
+  panel.classList.toggle('open', !isOpen);
+  if (!isOpen) buildThemePanel();
+}
+
+function closeThemePanel() {
+  document.getElementById('theme-panel')?.classList.remove('open');
+}
+
+
 function openDB() {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
@@ -135,6 +208,7 @@ async function loadAll() {
     if (s.key === 'workerUrl') state.workerUrl = s.value || WORKER_URL;
     if (s.key === 'backlogOpen') state.backlogOpen = s.value !== false;
     if (s.key === 'syncInterval') state.syncInterval = s.value || 600;
+    if (s.key === 'activeTheme') state.activeTheme = s.value || 'void';
   }
 }
 
@@ -2070,6 +2144,18 @@ function bindEvents() {
   document.getElementById('add-board-btn').addEventListener('click', openAddBoardModal);
   document.getElementById('settings-btn').addEventListener('click', openSettingsModal);
 
+  // Theme button
+  document.getElementById('theme-btn').addEventListener('click', e => {
+    e.stopPropagation();
+    toggleThemePanel();
+  });
+  document.addEventListener('click', e => {
+    if (!document.getElementById('theme-panel')?.contains(e.target) &&
+        e.target.id !== 'theme-btn') {
+      closeThemePanel();
+    }
+  });
+
   // ── Hamburger menu (mobile only) ──────────────────────
   const hamburgerBtn = document.getElementById('hamburger-btn');
   const drawer = document.getElementById('hamburger-drawer');
@@ -2133,6 +2219,10 @@ function bindEvents() {
   document.getElementById('drawer-settings-btn').addEventListener('click', () => {
     closeDrawer();
     openSettingsModal();
+  });
+  document.getElementById('drawer-theme-btn').addEventListener('click', () => {
+    closeDrawer();
+    toggleThemePanel();
   });
   document.getElementById('drawer-sync-btn').addEventListener('click', async () => {
     closeDrawer();
@@ -2304,6 +2394,9 @@ window.addEventListener('appinstalled', () => {
 async function init() {
   db = await openDB();
   await loadAll();
+
+  // Apply saved theme immediately
+  applyTheme(state.activeTheme || 'void');
 
   // Set active board if we have boards
   if (state.boards.length > 0) {
