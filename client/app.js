@@ -19,7 +19,7 @@ const CARD_COLORS = [
   { name: 'teal', value: '#14b8a6' },
 ];
 // Set this to your deployed Cloudflare Worker URL
-const WORKER_URL = '<WORKER_URL>';
+const WORKER_URL = 'https://flowboard-worker.abdullahalkafajy.workers.dev';
 
 // ═══════════════════════════════════════════════════════
 // STATE
