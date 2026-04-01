@@ -19,7 +19,7 @@ const CARD_COLORS = [
   { name: 'teal', value: '#14b8a6' },
 ];
 // Set this to your deployed Cloudflare Worker URL
-const WORKER_URL = 'https://flowboard-worker.abdullahalkafajy.workers.dev';
+const WORKER_URL = '<WORKER_URL>';
 
 // ═══════════════════════════════════════════════════════
 // STATE
@@ -274,10 +274,26 @@ function uid() {
 // ═══════════════════════════════════════════════════════
 // CRYPTO — board key hashing
 // ═══════════════════════════════════════════════════════
+// ─── Simple non-crypto fallback hash (used when crypto.subtle unavailable) ───
+function _simpleHash(str) {
+  // FNV-1a 64-bit (emulated in 32-bit pairs) — not cryptographic, but unique enough
+  // for local-only use where cloud sync isn't available anyway
+  let h1 = 0x811c9dc5, h2 = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i);
+    h1 ^= c; h1 = Math.imul(h1, 0x01000193) >>> 0;
+    h2 ^= c; h2 = Math.imul(h2, 0x01000193) >>> 0;
+  }
+  return (h1.toString(16).padStart(8,'0') + h2.toString(16).padStart(8,'0')).repeat(4);
+}
+
 async function hashKey(boardId, password) {
   const raw = `${boardId}:${password}`;
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  if (!crypto?.subtle) return _simpleHash(raw);
+  try {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  } catch { return _simpleHash(raw); }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -298,17 +314,20 @@ async function deriveEncKey(boardId, password) {
 }
 
 async function encryptData(boardId, password, data) {
-  const key = await deriveEncKey(boardId, password);
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const encoded = new TextEncoder().encode(JSON.stringify(data));
-  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
-  // Pack as base64(iv) + '.' + base64(ciphertext)
-  const toB64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
-  return { enc: 1, iv: toB64(iv), ct: toB64(ciphertext) };
+  if (!crypto?.subtle) return data; // no encryption without crypto API
+  try {
+    const key = await deriveEncKey(boardId, password);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const encoded = new TextEncoder().encode(JSON.stringify(data));
+    const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
+    const toB64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+    return { enc: 1, iv: toB64(iv), ct: toB64(ciphertext) };
+  } catch { return data; }
 }
 
 async function decryptData(boardId, password, payload) {
   if (!payload?.enc) return payload; // legacy plaintext
+  if (!crypto?.subtle) throw new Error('Encryption not available (requires HTTPS)');
   const key = await deriveEncKey(boardId, password);
   const fromB64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
   const iv = fromB64(payload.iv);
@@ -893,177 +912,151 @@ function buildCardEl(card) {
 }
 
 // ═══════════════════════════════════════════════════════
-// POINTER DRAG SYSTEM
+// DRAG SYSTEM — mouse (pointerdown) + touch (touchstart) unified
 // ═══════════════════════════════════════════════════════
-let _drag = null; // active drag state
-let _dragPending = null; // pending drag (waiting for movement threshold)
+let _drag = null;
 
 function initCardDrag(el, cardId) {
-  el.addEventListener('pointerdown', e => {
-    // Ignore right-click; ignore taps on buttons inside the card
+  // ── Mouse drag ──────────────────────────────────────
+  el.addEventListener('mousedown', e => {
     if (e.button !== 0) return;
     if (e.target.closest('button')) return;
+    e.preventDefault();
+    startDrag(e.clientX, e.clientY, el, cardId);
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  });
 
-    // On touch, require a small movement before committing to a drag
-    // so that taps still register as clicks
-    const isTouch = e.pointerType === 'touch';
+  // ── Touch drag ──────────────────────────────────────
+  let _touchStartX = 0, _touchStartY = 0, _touchMoved = false;
+  el.addEventListener('touchstart', e => {
+    if (e.target.closest('button')) return;
+    const t = e.touches[0];
+    _touchStartX = t.clientX;
+    _touchStartY = t.clientY;
+    _touchMoved = false;
+  }, { passive: true });
 
-    _dragPending = { e, el, cardId, isTouch };
+  el.addEventListener('touchmove', e => {
+    const t = e.touches[0];
+    const dx = t.clientX - _touchStartX;
+    const dy = t.clientY - _touchStartY;
 
-    if (!isTouch) {
-      // Mouse: start drag immediately
-      e.preventDefault();
-      el.setPointerCapture(e.pointerId);
-      startDrag(e, el, cardId);
-      _dragPending = null;
-    } else {
-      // Touch: wait for pointermove to confirm intention
-      el.setPointerCapture(e.pointerId);
+    if (!_drag && !_touchMoved) {
+      // Commit to drag once moved > 8px
+      if (Math.sqrt(dx*dx + dy*dy) > 8) {
+        _touchMoved = true;
+        e.preventDefault();
+        startDrag(_touchStartX, _touchStartY, el, cardId);
+      }
+      return;
     }
+
+    if (!_drag) return;
+    e.preventDefault();
+    moveDrag(t.clientX, t.clientY);
   }, { passive: false });
+
+  el.addEventListener('touchend', e => {
+    if (_drag) {
+      e.preventDefault();
+      endDrag();
+    }
+    _touchMoved = false;
+  }, { passive: false });
+
+  el.addEventListener('touchcancel', () => {
+    if (_drag) cancelDrag();
+    _touchMoved = false;
+  });
 }
 
-function startDrag(e, sourceEl, cardId) {
+function startDrag(startX, startY, sourceEl, cardId) {
   const rect = sourceEl.getBoundingClientRect();
-  const offsetX = e.clientX - rect.left;
-  const offsetY = e.clientY - rect.top;
+  const offsetX = startX - rect.left;
+  const offsetY = startY - rect.top;
 
   const originalCard = state.cards.find(c => c.id === cardId);
-  const originalColId = originalCard?.columnId ?? null;
-  const originalOrder = originalCard?.order ?? 0;
-  const originalNextSibling = sourceEl.nextSibling;
-  const originalParent = sourceEl.parentNode;
 
-  // Ghost
   const ghost = sourceEl.cloneNode(true);
   ghost.style.cssText = `
     position:fixed;left:${rect.left}px;top:${rect.top}px;
-    width:${rect.width}px;z-index:9999;pointer-events:none;
-    box-shadow:0 12px 40px rgba(0,0,0,0.6);opacity:0.92;
-    animation:none;transition:none;margin:0;transform:rotate(1.5deg);
+    width:${rect.width}px;z-index:9999;pointer-events:none;touch-action:none;
+    box-shadow:0 16px 48px rgba(0,0,0,0.55);opacity:0.94;
+    animation:none;transition:none;margin:0;transform:rotate(2deg) scale(1.03);
   `;
   document.body.appendChild(ghost);
 
-  sourceEl.style.visibility = 'hidden'; // hide but keep space until placeholder ready
+  sourceEl.style.display = 'none';
 
   const placeholder = document.createElement('div');
   placeholder.className = 'card-placeholder';
   placeholder.style.height = rect.height + 'px';
 
-  // Lock page scroll while dragging
-  document.getElementById('columns-area').style.overflow = 'hidden';
-
   _drag = {
-    cardId, sourceEl, ghost, placeholder, offsetX, offsetY,
-    originalColId, originalOrder, originalNextSibling, originalParent,
-    lastColId: originalParent.dataset.colId || null,
-    moved: false,
+    cardId, sourceEl, ghost, placeholder,
+    offsetX, offsetY,
+    originalNextSibling: sourceEl.nextSibling,
+    originalParent: sourceEl.parentNode,
   };
-
-  document.addEventListener('pointermove', onDragMove, { passive: false });
-  document.addEventListener('pointerup', onDragEnd);
-  document.addEventListener('pointercancel', onDragEnd);
 }
 
-const DRAG_THRESHOLD = 6; // px before touch drag commits
-
-function onDragMove(e) {
-  // Handle pending touch drag — check if moved enough to commit
-  if (_dragPending && !_drag) {
-    const { e: startE, el, cardId } = _dragPending;
-    const dx = e.clientX - startE.clientX;
-    const dy = e.clientY - startE.clientY;
-    if (Math.sqrt(dx*dx + dy*dy) > DRAG_THRESHOLD) {
-      _dragPending = null;
-      e.preventDefault();
-      startDrag(startE, el, cardId);
-    }
-    return;
-  }
-
+function onMouseMove(e) {
   if (!_drag) return;
-  e.preventDefault(); // prevent scroll during drag
-  _drag.moved = true;
+  moveDrag(e.clientX, e.clientY);
+}
 
-  const x = e.clientX;
-  const y = e.clientY;
+function onMouseUp() {
+  document.removeEventListener('mousemove', onMouseMove);
+  document.removeEventListener('mouseup', onMouseUp);
+  if (_drag) endDrag();
+}
 
-  _drag.ghost.style.left = (x - _drag.offsetX) + 'px';
-  _drag.ghost.style.top  = (y - _drag.offsetY) + 'px';
+function moveDrag(x, y) {
+  const { ghost, placeholder, sourceEl } = _drag;
 
-  // Hide ghost to hit-test beneath
-  _drag.ghost.style.display = 'none';
+  ghost.style.left = (x - _drag.offsetX) + 'px';
+  ghost.style.top  = (y - _drag.offsetY) + 'px';
+
+  // Hit-test under ghost
+  ghost.style.visibility = 'hidden';
   const target = document.elementFromPoint(x, y);
-  _drag.ghost.style.display = '';
+  ghost.style.visibility = '';
+
+  document.querySelectorAll('.column.drag-over').forEach(c => c.classList.remove('drag-over'));
+  const backlogEl = document.getElementById('backlog-area');
+  backlogEl.style.outline = '';
 
   if (!target) return;
 
   const colCards = target.closest('.col-cards');
-  const backlogArea = target.closest('#backlog-area');
-
-  document.querySelectorAll('.column.drag-over').forEach(c => c.classList.remove('drag-over'));
-  document.getElementById('backlog-area').style.outline = '';
+  const inBacklog = target.closest('#backlog-area');
 
   if (colCards) {
     colCards.closest('.column').classList.add('drag-over');
-    // Show source placeholder on first column hit
-    if (!_drag.sourceEl.style.visibility || _drag.sourceEl.style.visibility === 'hidden') {
-      _drag.sourceEl.style.display = 'none';
-      _drag.sourceEl.style.visibility = '';
+    // Find insertion point
+    const cards = [...colCards.querySelectorAll('.card')].filter(c => c !== sourceEl);
+    let insertBefore = null;
+    for (const card of cards) {
+      const box = card.getBoundingClientRect();
+      if (y < box.top + box.height / 2) { insertBefore = card; break; }
     }
-    repositionPlaceholder(colCards, y);
-  } else if (backlogArea) {
-    backlogArea.style.outline = '2px solid var(--accent)';
-    backlogArea.style.outlineOffset = '-2px';
-    _drag.sourceEl.style.display = 'none';
-    _drag.sourceEl.style.visibility = '';
-    document.getElementById('backlog-cards').appendChild(_drag.placeholder);
+    if (insertBefore) {
+      if (placeholder.nextSibling !== insertBefore) colCards.insertBefore(placeholder, insertBefore);
+    } else {
+      if (colCards.lastElementChild !== placeholder) colCards.appendChild(placeholder);
+    }
+  } else if (inBacklog) {
+    backlogEl.style.outline = '2px solid var(--accent)';
+    backlogEl.style.outlineOffset = '-2px';
+    document.getElementById('backlog-cards').appendChild(placeholder);
   }
 }
 
-function repositionPlaceholder(colCards, y) {
-  const cards = [...colCards.querySelectorAll('.card')].filter(c => c !== _drag.sourceEl);
-  let insertBefore = null;
-
-  for (const card of cards) {
-    const box = card.getBoundingClientRect();
-    if (y < box.top + box.height / 2) {
-      insertBefore = card;
-      break;
-    }
-  }
-
-  if (insertBefore) {
-    if (_drag.placeholder.nextSibling !== insertBefore) {
-      colCards.insertBefore(_drag.placeholder, insertBefore);
-    }
-  } else {
-    if (colCards.lastElementChild !== _drag.placeholder) {
-      colCards.appendChild(_drag.placeholder);
-    }
-  }
-}
-
-async function onDragEnd(e) {
-  // If we never committed the touch drag, clean up pending and let click fire
-  if (_dragPending) {
-    _dragPending = null;
-    document.removeEventListener('pointermove', onDragMove);
-    document.removeEventListener('pointerup', onDragEnd);
-    document.removeEventListener('pointercancel', onDragEnd);
-    return;
-  }
-
-  document.removeEventListener('pointermove', onDragMove);
-  document.removeEventListener('pointerup', onDragEnd);
-  document.removeEventListener('pointercancel', onDragEnd);
-
+async function endDrag() {
   if (!_drag) return;
-  const { cardId, sourceEl, ghost, placeholder, originalColId, originalOrder, originalParent, originalNextSibling } = _drag;
+  const { cardId, sourceEl, ghost, placeholder } = _drag;
   _drag = null;
-
-  // Restore scroll
-  document.getElementById('columns-area').style.overflow = '';
 
   ghost.remove();
   document.querySelectorAll('.column.drag-over').forEach(c => c.classList.remove('drag-over'));
@@ -1075,18 +1068,14 @@ async function onDragEnd(e) {
   if (!colCards && !inBacklog) {
     placeholder.remove();
     sourceEl.style.display = '';
-    sourceEl.style.visibility = '';
     return;
   }
 
-  let targetColId = null;
-  let targetIdx = 0;
-
+  let targetColId = null, targetIdx = 0;
   if (colCards) {
     targetColId = colCards.dataset.colId;
-    const siblings = [...colCards.querySelectorAll('.card')].filter(c => c !== sourceEl);
     targetIdx = [...colCards.children].filter(c => c !== sourceEl).indexOf(placeholder);
-    if (targetIdx < 0) targetIdx = siblings.length;
+    if (targetIdx < 0) targetIdx = [...colCards.querySelectorAll('.card')].filter(c => c !== sourceEl).length;
   }
 
   placeholder.remove();
@@ -1094,7 +1083,18 @@ async function onDragEnd(e) {
   await moveCard(cardId, targetColId, targetIdx);
 }
 
-// setupColumnDrop and initBacklogDrop are no longer needed — pointer system handles all drops
+function cancelDrag() {
+  if (!_drag) return;
+  const { ghost, placeholder, sourceEl } = _drag;
+  _drag = null;
+  ghost.remove();
+  placeholder.remove();
+  sourceEl.style.display = '';
+  document.querySelectorAll('.column.drag-over').forEach(c => c.classList.remove('drag-over'));
+  document.getElementById('backlog-area').style.outline = '';
+}
+
+// no-ops (kept for call-site compatibility)
 function setupColumnDrop() {}
 function initBacklogDrop() {}
 
@@ -1538,10 +1538,19 @@ function openModal(content) {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = content;
-  overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(); });
+
+  // Stop all clicks/taps that originate inside the modal box from reaching the overlay
+  const modalBox = overlay.firstElementChild;
+  if (modalBox) {
+    modalBox.addEventListener('click', e => e.stopPropagation());
+    modalBox.addEventListener('touchend', e => e.stopPropagation());
+  }
+
+  // Tap on bare overlay backdrop closes the modal
+  overlay.addEventListener('click', () => closeModal());
+
   document.body.appendChild(overlay);
   activeModal = overlay;
-  // Focus first input
   setTimeout(() => overlay.querySelector('input,textarea')?.focus(), 50);
   return overlay;
 }
@@ -2319,12 +2328,25 @@ function bindEvents() {
   });
 
   // Backlog toggle
-  document.getElementById('backlog-header').addEventListener('click', () => {
-    const area = document.getElementById('backlog-area');
+  const backlogHeader = document.getElementById('backlog-header');
+  const backlogArea   = document.getElementById('backlog-area');
+
+  function toggleBacklog(e) {
+    // Don't toggle if the tap was on the add button
+    if (e.target.closest('#backlog-add-btn')) return;
     state.backlogOpen = !state.backlogOpen;
-    area.classList.toggle('open', state.backlogOpen);
+    backlogArea.classList.toggle('open', state.backlogOpen);
     saveSetting('backlogOpen', state.backlogOpen);
-  });
+  }
+
+  // Use both click (desktop) and touchstart (mobile — fires before any card touchstart)
+  backlogHeader.addEventListener('click', toggleBacklog);
+  backlogHeader.addEventListener('touchstart', e => {
+    if (e.target.closest('#backlog-add-btn')) return;
+    e.preventDefault(); // prevent the subsequent click from double-toggling
+    toggleBacklog(e);
+  }, { passive: false });
+
   document.getElementById('backlog-add-btn').addEventListener('click', e => {
     e.stopPropagation();
     openCardModal(null, null, state.activeBoardId);

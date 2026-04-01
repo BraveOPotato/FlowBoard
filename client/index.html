@@ -352,7 +352,7 @@ body {
   padding: 16px; flex: 1;
   overflow-x: auto; overflow-y: hidden;
   align-items: flex-start;
-  touch-action: pan-x pan-y;
+  touch-action: pan-x;
 }
 
 .column {
@@ -480,10 +480,12 @@ body {
   flex-shrink: 0; border-top: 1px solid var(--border);
   background: var(--bg2);
   transition: height 0.25s ease;
+  min-height: 44px; /* always shows the header row */
 }
 #backlog-header {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 16px; cursor: pointer; user-select: none;
+  min-height: 44px; /* large enough touch target */
 }
 #backlog-toggle-icon { color: var(--text3); transition: transform 0.2s; font-size: 12px; }
 #backlog-area.open #backlog-toggle-icon { transform: rotate(180deg); }
@@ -1035,10 +1037,16 @@ body {
   .tl-entry-body { padding: 8px 10px; }
 
   /* ── Modals ── */
+  .modal-overlay {
+    align-items: flex-start;
+    padding-top: 16px;
+    overflow-y: auto;
+  }
   .modal, .modal.modal-lg {
     width: calc(100vw - 20px);
-    max-height: 88vh;
+    max-height: calc(100svh - 32px);
     padding: 18px 14px;
+    margin-bottom: 16px;
   }
   .form-row { flex-direction: column; gap: 0; }
 
