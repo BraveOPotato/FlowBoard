@@ -352,7 +352,7 @@ body {
   padding: 16px; flex: 1;
   overflow-x: auto; overflow-y: hidden;
   align-items: flex-start;
-  touch-action: pan-x;
+  touch-action: pan-x pan-y;
 }
 
 .column {
@@ -422,6 +422,7 @@ body {
   cursor: grab; position: relative;
   transition: box-shadow 0.15s, border-color 0.15s;
   user-select: none;
+  touch-action: none;
 }
 .card:hover { border-color: var(--border2); box-shadow: var(--shadow); }
 .card:active { cursor: grabbing; }
@@ -430,6 +431,7 @@ body {
   background: var(--accent-glow);
   border: 2px dashed var(--accent);
   pointer-events: none;
+  touch-action: none;
   transition: height 0.1s;
 }
 

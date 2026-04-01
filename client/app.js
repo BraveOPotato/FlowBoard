@@ -896,16 +896,31 @@ function buildCardEl(card) {
 // POINTER DRAG SYSTEM
 // ═══════════════════════════════════════════════════════
 let _drag = null; // active drag state
+let _dragPending = null; // pending drag (waiting for movement threshold)
 
 function initCardDrag(el, cardId) {
   el.addEventListener('pointerdown', e => {
-    // Only left-button; ignore clicks on buttons inside the card
+    // Ignore right-click; ignore taps on buttons inside the card
     if (e.button !== 0) return;
     if (e.target.closest('button')) return;
 
-    e.preventDefault();
-    startDrag(e, el, cardId);
-  });
+    // On touch, require a small movement before committing to a drag
+    // so that taps still register as clicks
+    const isTouch = e.pointerType === 'touch';
+
+    _dragPending = { e, el, cardId, isTouch };
+
+    if (!isTouch) {
+      // Mouse: start drag immediately
+      e.preventDefault();
+      el.setPointerCapture(e.pointerId);
+      startDrag(e, el, cardId);
+      _dragPending = null;
+    } else {
+      // Touch: wait for pointermove to confirm intention
+      el.setPointerCapture(e.pointerId);
+    }
+  }, { passive: false });
 }
 
 function startDrag(e, sourceEl, cardId) {
@@ -913,96 +928,100 @@ function startDrag(e, sourceEl, cardId) {
   const offsetX = e.clientX - rect.left;
   const offsetY = e.clientY - rect.top;
 
-  // Remember original DOM position for cancel/restore
   const originalCard = state.cards.find(c => c.id === cardId);
   const originalColId = originalCard?.columnId ?? null;
   const originalOrder = originalCard?.order ?? 0;
   const originalNextSibling = sourceEl.nextSibling;
   const originalParent = sourceEl.parentNode;
 
-  // Clone the card as a floating ghost
+  // Ghost
   const ghost = sourceEl.cloneNode(true);
   ghost.style.cssText = `
-    position: fixed;
-    left: ${rect.left}px;
-    top: ${rect.top}px;
-    width: ${rect.width}px;
-    z-index: 9999;
-    pointer-events: none;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-    animation: none;
-    transition: none;
-    margin: 0;
+    position:fixed;left:${rect.left}px;top:${rect.top}px;
+    width:${rect.width}px;z-index:9999;pointer-events:none;
+    box-shadow:0 12px 40px rgba(0,0,0,0.6);opacity:0.92;
+    animation:none;transition:none;margin:0;transform:rotate(1.5deg);
   `;
   document.body.appendChild(ghost);
 
-  // Collapse source card entirely so no gap remains — ghost is the visual
-  sourceEl.style.display = 'none';
+  sourceEl.style.visibility = 'hidden'; // hide but keep space until placeholder ready
 
-  // Placeholder created but NOT inserted yet — onDragMove places it on first hover
   const placeholder = document.createElement('div');
   placeholder.className = 'card-placeholder';
   placeholder.style.height = rect.height + 'px';
 
+  // Lock page scroll while dragging
+  document.getElementById('columns-area').style.overflow = 'hidden';
+
   _drag = {
-    cardId,
-    sourceEl,
-    ghost,
-    placeholder,
-    offsetX,
-    offsetY,
-    originalColId,
-    originalOrder,
-    originalNextSibling,
-    originalParent,
+    cardId, sourceEl, ghost, placeholder, offsetX, offsetY,
+    originalColId, originalOrder, originalNextSibling, originalParent,
     lastColId: originalParent.dataset.colId || null,
     moved: false,
   };
 
-  document.addEventListener('pointermove', onDragMove, { passive: true });
+  document.addEventListener('pointermove', onDragMove, { passive: false });
   document.addEventListener('pointerup', onDragEnd);
   document.addEventListener('pointercancel', onDragEnd);
 }
 
+const DRAG_THRESHOLD = 6; // px before touch drag commits
+
 function onDragMove(e) {
+  // Handle pending touch drag — check if moved enough to commit
+  if (_dragPending && !_drag) {
+    const { e: startE, el, cardId } = _dragPending;
+    const dx = e.clientX - startE.clientX;
+    const dy = e.clientY - startE.clientY;
+    if (Math.sqrt(dx*dx + dy*dy) > DRAG_THRESHOLD) {
+      _dragPending = null;
+      e.preventDefault();
+      startDrag(startE, el, cardId);
+    }
+    return;
+  }
+
   if (!_drag) return;
+  e.preventDefault(); // prevent scroll during drag
   _drag.moved = true;
 
   const x = e.clientX;
   const y = e.clientY;
 
-  // Move ghost
   _drag.ghost.style.left = (x - _drag.offsetX) + 'px';
   _drag.ghost.style.top  = (y - _drag.offsetY) + 'px';
 
-  // Hide ghost temporarily to hit-test beneath it
+  // Hide ghost to hit-test beneath
   _drag.ghost.style.display = 'none';
   const target = document.elementFromPoint(x, y);
   _drag.ghost.style.display = '';
 
   if (!target) return;
 
-  // Find the column cards area we're over
   const colCards = target.closest('.col-cards');
   const backlogArea = target.closest('#backlog-area');
 
-  // Highlight drop targets
   document.querySelectorAll('.column.drag-over').forEach(c => c.classList.remove('drag-over'));
   document.getElementById('backlog-area').style.outline = '';
 
   if (colCards) {
     colCards.closest('.column').classList.add('drag-over');
+    // Show source placeholder on first column hit
+    if (!_drag.sourceEl.style.visibility || _drag.sourceEl.style.visibility === 'hidden') {
+      _drag.sourceEl.style.display = 'none';
+      _drag.sourceEl.style.visibility = '';
+    }
     repositionPlaceholder(colCards, y);
   } else if (backlogArea) {
     backlogArea.style.outline = '2px solid var(--accent)';
     backlogArea.style.outlineOffset = '-2px';
-    // Move placeholder out of any column
+    _drag.sourceEl.style.display = 'none';
+    _drag.sourceEl.style.visibility = '';
     document.getElementById('backlog-cards').appendChild(_drag.placeholder);
   }
 }
 
 function repositionPlaceholder(colCards, y) {
-  // Find insertion point using cached rects — no forced reflow
   const cards = [...colCards.querySelectorAll('.card')].filter(c => c !== _drag.sourceEl);
   let insertBefore = null;
 
@@ -1026,6 +1045,15 @@ function repositionPlaceholder(colCards, y) {
 }
 
 async function onDragEnd(e) {
+  // If we never committed the touch drag, clean up pending and let click fire
+  if (_dragPending) {
+    _dragPending = null;
+    document.removeEventListener('pointermove', onDragMove);
+    document.removeEventListener('pointerup', onDragEnd);
+    document.removeEventListener('pointercancel', onDragEnd);
+    return;
+  }
+
   document.removeEventListener('pointermove', onDragMove);
   document.removeEventListener('pointerup', onDragEnd);
   document.removeEventListener('pointercancel', onDragEnd);
@@ -1034,23 +1062,20 @@ async function onDragEnd(e) {
   const { cardId, sourceEl, ghost, placeholder, originalColId, originalOrder, originalParent, originalNextSibling } = _drag;
   _drag = null;
 
-  // Clean up ghost and highlights
+  // Restore scroll
+  document.getElementById('columns-area').style.overflow = '';
+
   ghost.remove();
   document.querySelectorAll('.column.drag-over').forEach(c => c.classList.remove('drag-over'));
   document.getElementById('backlog-area').style.outline = '';
 
-  const restoreSourceCard = () => {
-    sourceEl.style.display = '';
-  };
-
-  // Determine drop target from placeholder's current position
   const colCards = placeholder.closest('.col-cards');
   const inBacklog = placeholder.closest('#backlog-area');
 
   if (!colCards && !inBacklog) {
-    // Dropped outside any valid target — restore to original position
     placeholder.remove();
-    restoreSourceCard();
+    sourceEl.style.display = '';
+    sourceEl.style.visibility = '';
     return;
   }
 
@@ -1059,18 +1084,12 @@ async function onDragEnd(e) {
 
   if (colCards) {
     targetColId = colCards.dataset.colId;
-    // Count siblings excluding the hidden source card
     const siblings = [...colCards.querySelectorAll('.card')].filter(c => c !== sourceEl);
     targetIdx = [...colCards.children].filter(c => c !== sourceEl).indexOf(placeholder);
     if (targetIdx < 0) targetIdx = siblings.length;
-  } else {
-    targetColId = null;
-    targetIdx = 0;
   }
 
   placeholder.remove();
-
-  // moveCard handles re-render — source card will be rebuilt fresh, so just remove the hidden original
   sourceEl.remove();
   await moveCard(cardId, targetColId, targetIdx);
 }
@@ -2165,16 +2184,21 @@ function bindEvents() {
   document.getElementById('add-board-btn').addEventListener('click', openAddBoardModal);
   document.getElementById('settings-btn').addEventListener('click', openSettingsModal);
 
-  // Theme button
+  // Theme button — use pointerup so we can set a flag before the click bubbles
+  let _themePanelJustOpened = false;
   document.getElementById('theme-btn').addEventListener('click', e => {
     e.stopPropagation();
     toggleThemePanel();
+    _themePanelJustOpened = true;
+    setTimeout(() => { _themePanelJustOpened = false; }, 50);
   });
   document.getElementById('theme-overlay')?.addEventListener('click', closeThemePanel);
+  // Close on outside click/tap — but ignore the tap that just opened it
   document.addEventListener('click', e => {
-    if (!document.getElementById('theme-panel')?.contains(e.target) &&
-        e.target.id !== 'theme-btn' &&
-        e.target.id !== 'theme-overlay') {
+    if (_themePanelJustOpened) return;
+    const panel = document.getElementById('theme-panel');
+    if (!panel?.classList.contains('open')) return;
+    if (!panel.contains(e.target) && e.target.id !== 'theme-btn') {
       closeThemePanel();
     }
   });
@@ -2245,7 +2269,8 @@ function bindEvents() {
   });
   document.getElementById('drawer-theme-btn').addEventListener('click', () => {
     closeDrawer();
-    toggleThemePanel();
+    // Small delay so the drawer overlay click doesn't immediately close the theme panel
+    setTimeout(() => toggleThemePanel(), 80);
   });
   document.getElementById('drawer-sync-btn').addEventListener('click', async () => {
     closeDrawer();
