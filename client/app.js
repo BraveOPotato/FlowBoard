@@ -1759,6 +1759,41 @@ function openAddBoardModal() {
 }
 
 // ─── Settings Modal ───
+function openContactModal() {
+  const modal = openModal(`
+    <div class="modal">
+      <div class="modal-title">✉ Contact Developer <button class="modal-close">✕</button></div>
+      <div class="form-group">
+        <label class="form-label">Reason</label>
+        <select class="form-select" id="contact-reason">
+          <option value="Feature Request">Feature Request</option>
+          <option value="Bug">Bug</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Message (optional)</label>
+        <textarea class="form-textarea" id="contact-message" placeholder="Describe your request or issue..."></textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="contact-cancel">Cancel</button>
+        <button class="btn btn-primary" id="contact-submit">Open Email Client</button>
+      </div>
+    </div>
+  `);
+
+  modal.querySelector('.modal-close').addEventListener('click', closeModal);
+  modal.querySelector('#contact-cancel').addEventListener('click', closeModal);
+  modal.querySelector('#contact-submit').addEventListener('click', () => {
+    const reason  = modal.querySelector('#contact-reason').value;
+    const message = modal.querySelector('#contact-message').value.trim();
+    const subject = encodeURIComponent(`FlowBoard.cc - Feedback - ${reason}`);
+    const body    = encodeURIComponent(message);
+    window.location.href = `mailto:abdullah@alkhafaji.dev?subject=${subject}${body ? `&body=${body}` : ''}`;
+    closeModal();
+  });
+}
+
 async function openSettingsModal() {
   const allCreds = await getAllBoardCreds();
   const secs = parseInt(state.syncInterval) || 600;
@@ -1838,6 +1873,7 @@ async function openSettingsModal() {
       </div>
 
       <div class="modal-actions">
+        <button class="btn btn-secondary" id="contact-dev-btn" style="margin-right:auto">✉ Contact Developer</button>
         <button class="btn btn-secondary" id="settings-close">Close</button>
         <button class="btn btn-primary" id="settings-save">Save Settings</button>
       </div>
@@ -1846,6 +1882,7 @@ async function openSettingsModal() {
 
   modal.querySelector('.modal-close').addEventListener('click', closeModal);
   modal.querySelector('#settings-close').addEventListener('click', closeModal);
+  modal.querySelector('#contact-dev-btn').addEventListener('click', openContactModal);
 
   function setWorkerIndicator(ok, msg) {
     const ind = modal.querySelector('#settings-worker-indicator');
