@@ -827,7 +827,8 @@ function buildColumnEl(col, cards) {
 
   el.innerHTML = `
     <div class="col-header">
-      <div class="col-color-dot" style="background:${col.color}"></div>
+      <span class="col-drag-handle" title="Drag to reorder">⠿</span>
+      <div class="col-color-dot" style="background:${col.color}" title="Change color"></div>
       <input class="col-title" value="${escHtml(col.name)}" spellcheck="false">
       <span class="col-count">${cards.length}</span>
       <button class="col-menu-btn" data-id="${col.id}">⋯</button>
@@ -868,8 +869,17 @@ function buildColumnEl(col, cards) {
     openCardModal(null, col.id, state.activeBoardId);
   });
 
-  // Drag/drop
+  // Drag/drop cards
   setupColumnDrop(cardsArea, col.id);
+
+  // Color dot picker
+  el.querySelector('.col-color-dot').addEventListener('click', e => {
+    e.stopPropagation();
+    showColColorPicker(e.currentTarget, col);
+  });
+
+  // Column reorder drag
+  initColumnDrag(el, col.id);
 
   return el;
 }
@@ -1097,6 +1107,197 @@ function cancelDrag() {
 // no-ops (kept for call-site compatibility)
 function setupColumnDrop() {}
 function initBacklogDrop() {}
+
+// ═══════════════════════════════════════════════════════
+// COLUMN COLOR PICKER
+// ═══════════════════════════════════════════════════════
+function showColColorPicker(dotEl, col) {
+  // Remove any existing picker
+  document.querySelector('.col-color-picker-popup')?.remove();
+
+  const popup = document.createElement('div');
+  popup.className = 'col-color-picker-popup';
+
+  const colors = CARD_COLORS.filter(c => c.value !== 'transparent');
+  popup.innerHTML = colors.map(c => `
+    <div class="col-color-picker-swatch ${col.color === c.value ? 'active' : ''}"
+      data-color="${c.value}"
+      style="background:${c.value}"
+      title="${c.name}"></div>
+  `).join('');
+
+  // Position below the dot
+  const rect = dotEl.getBoundingClientRect();
+  popup.style.cssText = `
+    position:fixed;
+    top:${rect.bottom + 6}px;
+    left:${rect.left}px;
+    z-index:4000;
+  `;
+
+  popup.addEventListener('click', async e => {
+    const swatch = e.target.closest('.col-color-picker-swatch');
+    if (!swatch) return;
+    const color = swatch.dataset.color;
+    await updateColumn(col.id, { color });
+    dotEl.style.background = color;
+    popup.querySelectorAll('.col-color-picker-swatch').forEach(s => s.classList.toggle('active', s.dataset.color === color));
+    popup.remove();
+  });
+
+  document.body.appendChild(popup);
+
+  // Close on outside click
+  const close = e => {
+    if (!popup.contains(e.target) && e.target !== dotEl) {
+      popup.remove();
+      document.removeEventListener('mousedown', close, true);
+      document.removeEventListener('touchstart', close, true);
+    }
+  };
+  setTimeout(() => {
+    document.addEventListener('mousedown', close, true);
+    document.addEventListener('touchstart', close, true);
+  }, 0);
+}
+
+// ═══════════════════════════════════════════════════════
+// COLUMN REORDER DRAG
+// ═══════════════════════════════════════════════════════
+let _colDrag = null;
+
+function initColumnDrag(colEl, colId) {
+  const handle = colEl.querySelector('.col-drag-handle');
+
+  const startColDrag = (startX, startY) => {
+    const area = document.getElementById('columns-area');
+    const rect = colEl.getBoundingClientRect();
+
+    const ghost = colEl.cloneNode(true);
+    ghost.style.cssText = `
+      position:fixed;left:${rect.left}px;top:${rect.top}px;
+      width:${rect.width}px;height:${rect.height}px;
+      z-index:9999;pointer-events:none;touch-action:none;
+      opacity:0.85;box-shadow:0 16px 48px rgba(0,0,0,0.55);
+      transform:rotate(1.5deg) scale(1.02);transition:none;
+    `;
+    document.body.appendChild(ghost);
+
+    const placeholder = document.createElement('div');
+    placeholder.style.cssText = `flex:0 0 ${rect.width}px;height:${rect.height}px;
+      border-radius:var(--radius-lg);background:var(--accent-glow);
+      border:2px dashed var(--accent);`;
+    colEl.parentNode.insertBefore(placeholder, colEl);
+    colEl.style.display = 'none';
+
+    _colDrag = {
+      colId, colEl, ghost, placeholder,
+      offsetX: startX - rect.left,
+      offsetY: startY - rect.top,
+    };
+  };
+
+  const moveColDrag = (x, y) => {
+    if (!_colDrag) return;
+    const { ghost, placeholder, colEl } = _colDrag;
+    ghost.style.left = (x - _colDrag.offsetX) + 'px';
+    ghost.style.top  = (y - _colDrag.offsetY) + 'px';
+
+    // Find insertion point among sibling columns
+    ghost.style.visibility = 'hidden';
+    const target = document.elementFromPoint(x, y);
+    ghost.style.visibility = '';
+    if (!target) return;
+
+    const targetCol = target.closest('.column');
+    if (targetCol && targetCol !== colEl) {
+      const tRect = targetCol.getBoundingClientRect();
+      if (x < tRect.left + tRect.width / 2) {
+        targetCol.parentNode.insertBefore(placeholder, targetCol);
+      } else {
+        targetCol.parentNode.insertBefore(placeholder, targetCol.nextSibling);
+      }
+    }
+  };
+
+  const endColDrag = async () => {
+    if (!_colDrag) return;
+    const { colId, colEl, ghost, placeholder } = _colDrag;
+    _colDrag = null;
+
+    ghost.remove();
+    placeholder.parentNode.insertBefore(colEl, placeholder);
+    placeholder.remove();
+    colEl.style.display = '';
+
+    // Derive new order from DOM positions
+    const area = document.getElementById('columns-area');
+    const colEls = [...area.querySelectorAll('.column')];
+    const updates = colEls.map((el, i) => ({ id: el.dataset.colId, order: i }));
+    for (const { id, order } of updates) {
+      await updateColumn(id, { order });
+    }
+  };
+
+  const cancelColDrag = () => {
+    if (!_colDrag) return;
+    const { colEl, ghost, placeholder } = _colDrag;
+    _colDrag = null;
+    ghost.remove();
+    placeholder.parentNode.insertBefore(colEl, placeholder);
+    placeholder.remove();
+    colEl.style.display = '';
+  };
+
+  // Mouse
+  handle.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    startColDrag(e.clientX, e.clientY);
+    const onMove = e => moveColDrag(e.clientX, e.clientY);
+    const onUp   = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      endColDrag();
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+
+  // Touch
+  let _tStartX = 0, _tStartY = 0, _tMoved = false;
+  handle.addEventListener('touchstart', e => {
+    const t = e.touches[0];
+    _tStartX = t.clientX; _tStartY = t.clientY; _tMoved = false;
+  }, { passive: true });
+
+  handle.addEventListener('touchmove', e => {
+    const t = e.touches[0];
+    const dx = t.clientX - _tStartX, dy = t.clientY - _tStartY;
+    if (!_colDrag && !_tMoved) {
+      if (Math.sqrt(dx*dx + dy*dy) > 8) {
+        _tMoved = true;
+        e.preventDefault();
+        startColDrag(_tStartX, _tStartY);
+      }
+      return;
+    }
+    if (!_colDrag) return;
+    e.preventDefault();
+    moveColDrag(t.clientX, t.clientY);
+  }, { passive: false });
+
+  handle.addEventListener('touchend', e => {
+    if (_colDrag) { e.preventDefault(); endColDrag(); }
+    _tMoved = false;
+  }, { passive: false });
+
+  handle.addEventListener('touchcancel', () => {
+    if (_colDrag) cancelColDrag();
+    _tMoved = false;
+  });
+}
 
 // ═══════════════════════════════════════════════════════
 // RENDER: BACKLOG

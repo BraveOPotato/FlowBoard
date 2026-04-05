@@ -366,9 +366,33 @@ body {
   display: flex; align-items: center; gap: 8px;
   padding: 12px 14px 10px; flex-shrink: 0;
 }
+.col-drag-handle {
+  cursor: grab; color: var(--text3); font-size: 16px;
+  padding: 0 2px; flex-shrink: 0; line-height: 1;
+  transition: color 0.12s; user-select: none;
+}
+.col-drag-handle:hover { color: var(--text2); }
+.col-drag-handle:active { cursor: grabbing; }
+
 .col-color-dot {
   width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+  cursor: pointer; transition: transform 0.12s, box-shadow 0.12s;
 }
+.col-color-dot:hover { transform: scale(1.35); box-shadow: 0 0 0 3px var(--border2); }
+
+.col-color-picker-popup {
+  display: flex; flex-wrap: wrap; gap: 7px;
+  background: var(--bg2); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 10px;
+  box-shadow: var(--shadow-lg); width: 158px;
+}
+.col-color-picker-swatch {
+  width: 22px; height: 22px; border-radius: 50%; cursor: pointer;
+  border: 2px solid transparent; transition: transform 0.12s, border-color 0.12s;
+  flex-shrink: 0;
+}
+.col-color-picker-swatch:hover { transform: scale(1.2); }
+.col-color-picker-swatch.active { border-color: white; transform: scale(1.15); }
 .col-title {
   flex: 1; font-weight: 600; font-size: 13px;
   font-family: var(--font-display);
