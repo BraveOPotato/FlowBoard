@@ -2025,6 +2025,7 @@ async function openSettingsModal() {
           <label class="form-label">Worker URL</label>
           <input class="form-input" id="settings-worker-url" value="${escHtml(state.workerUrl || WORKER_URL)}" placeholder="https://flowboard-worker.*.workers.dev">
         </div>
+        <div style="display:flex;align-items:flex-start;gap:24px;flex-wrap:wrap">
         <div class="form-group">
           <label class="form-label">Sync Interval</label>
           <select class="form-select" id="settings-sync-interval" style="width:200px">
@@ -2034,6 +2035,14 @@ async function openSettingsModal() {
             <option value="1800" ${secs===1800?'selected':''}>Every 30 minutes</option>
             <option value="3600" ${secs===3600?'selected':''}>Every hour</option>
           </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Version</label>
+          <button class="btn btn-secondary" id="settings-check-update" style="display:flex;align-items:center;gap:6px">
+            <span id="settings-update-icon">🔄</span>
+            <span id="settings-update-label">Check &amp; Update</span>
+          </button>
+        </div>
         </div>
       </div>
 
@@ -2083,6 +2092,82 @@ async function openSettingsModal() {
 
   modal.querySelector('.modal-close').addEventListener('click', closeModal);
   modal.querySelector('#settings-close').addEventListener('click', closeModal);
+
+  // Check & Update App — triggers SW update check then reloads when a new version activates
+  modal.querySelector('#settings-check-update').addEventListener('click', async () => {
+    const btn   = modal.querySelector('#settings-check-update');
+    const icon  = modal.querySelector('#settings-update-icon');
+    const label = modal.querySelector('#settings-update-label');
+
+    btn.disabled = true;
+    icon.textContent  = '⏳';
+    label.textContent = 'Checking…';
+
+    if (!('serviceWorker' in navigator)) {
+      icon.textContent  = '⚠️';
+      label.textContent = 'SW not supported';
+      btn.disabled = false;
+      return;
+    }
+
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (!reg) {
+        icon.textContent  = '⚠️';
+        label.textContent = 'No SW registered';
+        btn.disabled = false;
+        return;
+      }
+
+      // If a new SW is already waiting, skip it straight to active and reload
+      if (reg.waiting) {
+        reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+        await new Promise(r => setTimeout(r, 400));
+        window.location.reload();
+        return;
+      }
+
+      // Ask the SW to check for an update from the network
+      await reg.update();
+
+      if (reg.waiting) {
+        // Update was already downloaded — activate and reload
+        reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+        await new Promise(r => setTimeout(r, 400));
+        window.location.reload();
+        return;
+      }
+
+      // Listen for a new SW installing during this check
+      let settled = false;
+      const onUpdate = (newReg) => {
+        const sw = newReg.installing || newReg.waiting;
+        if (!sw) return;
+        sw.addEventListener('statechange', () => {
+          if (sw.state === 'installed' && !settled) {
+            settled = true;
+            sw.postMessage({ type: 'SKIP_WAITING' });
+            setTimeout(() => window.location.reload(), 400);
+          }
+        });
+      };
+
+      reg.addEventListener('updatefound', () => onUpdate(reg));
+
+      // Give it 5 seconds; if nothing new found, report up-to-date
+      await new Promise(r => setTimeout(r, 5000));
+      if (!settled) {
+        icon.textContent  = '✅';
+        label.textContent = 'Already up to date';
+        btn.disabled = false;
+      }
+    } catch (err) {
+      console.error('[FlowBoard] Update check failed:', err);
+      icon.textContent  = '❌';
+      label.textContent = 'Update check failed';
+      btn.disabled = false;
+    }
+  });
   modal.querySelector('#contact-dev-btn').addEventListener('click', openContactModal);
 
   function setWorkerIndicator(ok, msg) {
