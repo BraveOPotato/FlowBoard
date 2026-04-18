@@ -941,7 +941,7 @@ function initCardDrag(el, cardId) {
   // touch-action is set to 'pan-x' on backlog cards via CSS so the browser
   // allows horizontal scrolling by default. We call e.preventDefault() only
   // once we've confirmed the gesture is a vertical drag, which overrides that.
-  let _touchStartX = 0, _touchStartY = 0, _touchMoved = false, _touchScrolling = false;
+  let _touchStartX = 0, _touchStartY = 0, _touchMoved = false, _touchScrolling = false, _inBacklog = null;
   el.addEventListener('touchstart', e => {
     if (e.target.closest('button')) return;
     const t = e.touches[0];
@@ -949,17 +949,19 @@ function initCardDrag(el, cardId) {
     _touchStartY = t.clientY;
     _touchMoved = false;
     _touchScrolling = false;
+    _inBacklog = e.target.closest('#backlog-area');
   }, { passive: true });
 
   el.addEventListener('touchmove', e => {
     const t = e.touches[0];
     const dx = t.clientX - _touchStartX;
     const dy = t.clientY - _touchStartY;
+    // If the dragging is inside the the Backlog.
 
     if (!_drag && !_touchMoved) {
       const dist = Math.sqrt(dx*dx + dy*dy);
       if (dist > 8) {
-        if (Math.abs(dx) > Math.abs(dy)) {
+        if (Math.abs(dx) > Math.abs(dy) && _inBacklog) {
           // Horizontal — let the backlog scroll natively, don't drag.
           _touchScrolling = true;
           return;

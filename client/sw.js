@@ -1,5 +1,5 @@
 /* FlowBoard Service Worker */
-const CACHE = 'flowboard-v1.0.2';
+const CACHE = 'flowboard-v1.0.3';
 const ASSETS = ['/', '/index.html', '/app.js', '/manifest.json'];
 
 self.addEventListener('install', e => {
