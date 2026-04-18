@@ -2672,9 +2672,8 @@ function bindEvents() {
   }
 
   // Use both click (desktop) and touchstart (mobile — fires before any card touchstart)
-  backlogHeader.addEventListener('click', toggleBacklog);
-  backlogHeader.addEventListener('touchstart', e => {
-    if (e.target.closest('#backlog-add-btn')) return;
+  backlogHeader.querySelector('#backlog-toggle-icon').addEventListener('click', toggleBacklog);
+  backlogHeader.querySelector('#backlog-toggle-icon').addEventListener('touchstart', e => {
     e.preventDefault(); // prevent the subsequent click from double-toggling
     toggleBacklog(e);
   }, { passive: false });
