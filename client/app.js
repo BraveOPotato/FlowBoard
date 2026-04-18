@@ -938,13 +938,17 @@ function initCardDrag(el, cardId) {
   });
 
   // ── Touch drag ──────────────────────────────────────
-  let _touchStartX = 0, _touchStartY = 0, _touchMoved = false;
+  // touch-action is set to 'pan-x' on backlog cards via CSS so the browser
+  // allows horizontal scrolling by default. We call e.preventDefault() only
+  // once we've confirmed the gesture is a vertical drag, which overrides that.
+  let _touchStartX = 0, _touchStartY = 0, _touchMoved = false, _touchScrolling = false;
   el.addEventListener('touchstart', e => {
     if (e.target.closest('button')) return;
     const t = e.touches[0];
     _touchStartX = t.clientX;
     _touchStartY = t.clientY;
     _touchMoved = false;
+    _touchScrolling = false;
   }, { passive: true });
 
   el.addEventListener('touchmove', e => {
@@ -953,8 +957,14 @@ function initCardDrag(el, cardId) {
     const dy = t.clientY - _touchStartY;
 
     if (!_drag && !_touchMoved) {
-      // Commit to drag once moved > 8px
-      if (Math.sqrt(dx*dx + dy*dy) > 8) {
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist > 8) {
+        if (Math.abs(dx) > Math.abs(dy)) {
+          // Horizontal — let the backlog scroll natively, don't drag.
+          _touchScrolling = true;
+          return;
+        }
+        // Vertical — start dragging, prevent scroll.
         _touchMoved = true;
         e.preventDefault();
         startDrag(_touchStartX, _touchStartY, el, cardId);
@@ -962,6 +972,7 @@ function initCardDrag(el, cardId) {
       return;
     }
 
+    if (_touchScrolling) return;
     if (!_drag) return;
     e.preventDefault();
     moveDrag(t.clientX, t.clientY);
@@ -973,11 +984,13 @@ function initCardDrag(el, cardId) {
       endDrag();
     }
     _touchMoved = false;
+    _touchScrolling = false;
   }, { passive: false });
 
   el.addEventListener('touchcancel', () => {
     if (_drag) cancelDrag();
     _touchMoved = false;
+    _touchScrolling = false;
   });
 }
 
