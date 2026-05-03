@@ -5,7 +5,7 @@
 // CONSTANTS
 // ═══════════════════════════════════════════════════════
 const DB_NAME = 'flowboard';
-const DB_VERSION = 3; // bumped: added boardCreds store
+const DB_VERSION = 4; // bumped: added crdtOps store
 const CARD_COLORS = [
   { name: 'none', value: 'transparent' },
   { name: 'violet', value: '#6c63ff' },
@@ -169,6 +169,11 @@ function openDB() {
         // stores { boardId, password, keyHash, name, lastSynced }
         d.createObjectStore('boardCreds', { keyPath: 'boardId' });
       }
+      if (!d.objectStoreNames.contains('crdtOps')) {
+        // stores pending (not-yet-acked) ops: { opId, type, ts, clientId, boardId, payload }
+        const os = d.createObjectStore('crdtOps', { keyPath: 'opId' });
+        os.createIndex('boardId', 'boardId');
+      }
     };
     req.onsuccess = e => resolve(e.target.result);
     req.onerror = e => reject(e.target.error);
@@ -252,6 +257,7 @@ async function recordActivity(boardId, cardId, type, meta = {}) {
   };
   state.activity.unshift(event); // prepend — list is newest-first
   await dbPut('activity', event);
+  await emitOp(boardId, 'activity.create', { ...event });
   syncToServer('upsertActivity', event);
   return event;
 }
@@ -446,10 +452,12 @@ async function syncAllBoards() {
   if (!allCreds.length) return false;
   let anyOk = false;
   for (const creds of allCreds) {
+    // CRDT sync (delta ops) — preferred
+    const crdtOk = await syncCrdtBoard(creds.boardId);
+    // Legacy full-state sync as fallback / for old clients reading the same board
     const pulled = await pullBoardFromWorker(creds.boardId);
-    // Always push after pull so local changes reach KV
     const pushed = await pushBoardToWorker(creds.boardId);
-    if (pulled || pushed) anyOk = true;
+    if (crdtOk || pulled || pushed) anyOk = true;
   }
   if (anyOk) { renderAll(); updateSyncTimestamp(); }
   return anyOk;
@@ -491,6 +499,269 @@ function stopSyncTimer() {
   if (_syncTimer) { clearInterval(_syncTimer); _syncTimer = null; }
 }
 
+// ═══════════════════════════════════════════════════════
+// CRDT OPERATION LOG
+// ═══════════════════════════════════════════════════════
+// Each op: { opId, type, ts, clientId, boardId, payload }
+// Op types: card.create | card.update | card.move | card.delete |
+//           column.create | column.update | column.delete |
+//           board.update | activity.create
+//
+// Client tracks pending ops (not yet acked by server) in IDB 'crdtOps' store.
+// Per-board lastPulledTs stored in IDB 'crdtMeta' store.
+
+// Lazy CLIENT_ID — persisted in IDB settings so it survives page reloads
+let _clientId = null;
+async function getClientId() {
+  if (_clientId) return _clientId;
+  const row = await dbGet('settings', 'clientId');
+  if (row) { _clientId = row.value; return _clientId; }
+  _clientId = 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  await dbPut('settings', { key: 'clientId', value: _clientId });
+  return _clientId;
+}
+
+// Ensure CRDT stores exist (called once in openDB via onupgradeneeded)
+// NOTE: added to openDB below via DB_VERSION bump
+
+function _crdtOpId() {
+  return 'op_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
+}
+
+// Build and persist a local op, queue for push
+async function emitOp(boardId, type, payload) {
+  const clientId = await getClientId();
+  const op = {
+    opId: _crdtOpId(),
+    type,
+    ts: Date.now(),
+    clientId,
+    boardId,
+    payload,
+  };
+  // Persist in IDB so we can retry if push fails
+  await dbPut('crdtOps', op);
+  // Schedule push
+  scheduleCrdtPush(boardId);
+  return op;
+}
+
+// Pending push timers per board
+const _crdtPushTimers = {};
+function scheduleCrdtPush(boardId) {
+  clearTimeout(_crdtPushTimers[boardId]);
+  _crdtPushTimers[boardId] = setTimeout(() => pushCrdtOps(boardId), 1200);
+}
+
+// Push all unpushed ops for a board to the worker
+async function pushCrdtOps(boardId) {
+  const creds = await getBoardCreds(boardId);
+  if (!creds) return false;
+
+  // Get all ops for this board from IDB
+  const allOps = await dbGetAll('crdtOps');
+  const pending = allOps.filter(o => o.boardId === boardId);
+  if (!pending.length) return true;
+
+  try {
+    const r = await fetch(`${workerUrl()}/api/crdt/ops/push`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ boardId, keyHash: creds.keyHash, ops: pending }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!r.ok) { setWorkerStatus(false); return false; }
+    const { ok, opsAccepted } = await r.json();
+    if (ok) {
+      // Remove pushed ops from IDB
+      for (const op of pending) await dbDelete('crdtOps', op.opId);
+      setWorkerStatus(true);
+      return true;
+    }
+    return false;
+  } catch (e) {
+    console.warn('[crdt] pushOps failed', e.message);
+    setWorkerStatus(false);
+    return false;
+  }
+}
+
+// Pull remote ops since lastPulledTs and apply to local state
+async function pullCrdtOps(boardId) {
+  const creds = await getBoardCreds(boardId);
+  if (!creds) return false;
+
+  const metaKey = `crdtMeta:${boardId}`;
+  const metaRow = await dbGet('settings', metaKey);
+  const since = metaRow?.value?.lastPulledTs || 0;
+
+  try {
+    const r = await fetch(`${workerUrl()}/api/crdt/ops/pull`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ boardId, keyHash: creds.keyHash, since }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!r.ok) { setWorkerStatus(false); return false; }
+    const { ops } = await r.json();
+
+    if (ops && ops.length > 0) {
+      let changed = false;
+      for (const op of ops) {
+        changed = applyCrdtOpLocally(op) || changed;
+      }
+      // Update lastPulledTs to the max ts we received
+      const maxTs = Math.max(...ops.map(o => o.ts));
+      await dbPut('settings', { key: metaKey, value: { lastPulledTs: maxTs } });
+      if (changed) {
+        state.boards.sort((a, b) => a.createdAt - b.createdAt);
+        state.columns.sort((a, b) => a.order - b.order);
+        state.cards.sort((a, b) => a.order - b.order);
+        state.activity.sort((a, b) => b.ts - a.ts);
+        renderAll();
+        updateSyncTimestamp();
+      }
+    }
+
+    setWorkerStatus(true);
+    return true;
+  } catch (e) {
+    console.warn('[crdt] pullOps failed', e.message);
+    setWorkerStatus(false);
+    return false;
+  }
+}
+
+// Apply a single remote op to local state + IDB (idempotent — skip if already local)
+// Returns true if state changed
+function applyCrdtOpLocally(op) {
+  const { type, ts, payload, clientId } = op;
+  // Skip ops we originated (already applied locally on emit)
+  if (_clientId && clientId === _clientId) return false;
+
+  switch (type) {
+    case 'board.update': {
+      const { boardId, ...fields } = payload;
+      const b = state.boards.find(x => x.id === boardId);
+      if (b) {
+        if (ts >= (b.__ts || 0)) { Object.assign(b, fields, { __ts: ts }); dbPut('boards', b); return true; }
+      } else {
+        const nb = { id: boardId, ...fields, __ts: ts };
+        state.boards.push(nb); dbPut('boards', nb); return true;
+      }
+      return false;
+    }
+    case 'column.create':
+    case 'column.update': {
+      const { id, ...fields } = payload;
+      const c = state.columns.find(x => x.id === id);
+      if (c) {
+        if (ts >= (c.__ts || 0)) { Object.assign(c, fields, { __ts: ts }); dbPut('columns', c); return true; }
+      } else {
+        const nc = { id, ...fields, __ts: ts };
+        state.columns.push(nc); dbPut('columns', nc); return true;
+      }
+      return false;
+    }
+    case 'column.delete': {
+      const { id } = payload;
+      const idx = state.columns.findIndex(x => x.id === id);
+      if (idx >= 0) {
+        state.columns.splice(idx, 1);
+        dbDelete('columns', id);
+        // Move orphaned cards to backlog
+        state.cards.filter(c => c.columnId === id).forEach(c => {
+          c.columnId = null; dbPut('cards', c);
+        });
+        return true;
+      }
+      return false;
+    }
+    case 'card.create':
+    case 'card.update':
+    case 'card.move': {
+      const { id, ...fields } = payload;
+      const c = state.cards.find(x => x.id === id);
+      if (c) {
+        if (ts >= (c.__ts || 0)) { Object.assign(c, fields, { __ts: ts }); dbPut('cards', c); return true; }
+      } else {
+        const nc = { id, ...fields, __ts: ts };
+        state.cards.push(nc); dbPut('cards', nc); return true;
+      }
+      return false;
+    }
+    case 'card.delete': {
+      const { id } = payload;
+      const idx = state.cards.findIndex(x => x.id === id);
+      if (idx >= 0) { state.cards.splice(idx, 1); dbDelete('cards', id); return true; }
+      return false;
+    }
+    case 'activity.create': {
+      const { id, ...fields } = payload;
+      if (!state.activity.find(a => a.id === id)) {
+        const na = { id, ...fields };
+        state.activity.unshift(na); dbPut('activity', na); return true;
+      }
+      return false;
+    }
+    default:
+      return false;
+  }
+}
+
+// Full CRDT sync for one board: pull then push pending
+async function syncCrdtBoard(boardId) {
+  const pulled = await pullCrdtOps(boardId);
+  const pushed = await pushCrdtOps(boardId);
+  return pulled || pushed;
+}
+
+// Sync all boards via CRDT
+async function syncAllBoardsCrdt() {
+  const allCreds = await getAllBoardCreds();
+  if (!allCreds.length) return false;
+  let anyOk = false;
+  for (const creds of allCreds) {
+    const ok = await syncCrdtBoard(creds.boardId);
+    if (ok) anyOk = true;
+  }
+  return anyOk;
+}
+
+// First-time join via CRDT: fetch full materialized state
+async function fetchCrdtInitialState(boardId) {
+  const creds = await getBoardCreds(boardId);
+  if (!creds) return false;
+  try {
+    const r = await fetch(`${workerUrl()}/api/crdt/state/get`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ boardId, keyHash: creds.keyHash }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!r.ok) return false;
+    const { found, data } = await r.json();
+    if (!found) return false;
+
+    for (const b of data.boards  || []) { await dbPut('boards',   b); upsertInState('boards',   b, 'id'); }
+    for (const c of data.columns || []) { await dbPut('columns',  c); upsertInState('columns',  c, 'id'); }
+    for (const c of data.cards   || []) { await dbPut('cards',    c); upsertInState('cards',    c, 'id'); }
+    for (const a of data.activity|| []) { await dbPut('activity', a); upsertInState('activity', a, 'id'); }
+
+    // Mark pull ts so we only pull deltas from now on
+    const metaKey = `crdtMeta:${boardId}`;
+    await dbPut('settings', { key: metaKey, value: { lastPulledTs: Date.now() } });
+    setWorkerStatus(true);
+    return true;
+  } catch (e) {
+    console.warn('[crdt] fetchInitialState failed', e.message);
+    setWorkerStatus(false);
+    return false;
+  }
+}
+
+
+
 function updateSyncTimestamp() {
   const txt = document.getElementById('server-status-text');
   if (!txt) return;
@@ -530,6 +801,7 @@ async function createBoard(name, password) {
   state.boards.push(board);
   await saveBoardCreds(boardId, password, keyHash, board.name);
   await setActiveBoard(board.id);
+  await emitOp(boardId, 'board.update', { boardId, ...board });
   schedulePush(boardId);
   renderBoardTabs();
   return board;
@@ -540,6 +812,7 @@ async function renameBoard(id, name) {
   if (!board) return;
   board.name = name;
   await dbPut('boards', board);
+  await emitOp(board.id, 'board.update', { boardId: board.id, name });
   syncToServer('upsertBoard', board);
   renderBoardTabs();
 }
@@ -601,6 +874,7 @@ async function createColumn(boardId, name) {
   };
   await dbPut('columns', col);
   state.columns.push(col);
+  await emitOp(boardId, 'column.create', { ...col });
   syncToServer('upsertColumn', col);
   renderBoardView();
   return col;
@@ -611,6 +885,7 @@ async function updateColumn(id, updates) {
   if (!col) return;
   Object.assign(col, updates);
   await dbPut('columns', col);
+  await emitOp(col.boardId, 'column.update', { ...col });
   syncToServer('upsertColumn', col);
 }
 
@@ -626,6 +901,7 @@ async function deleteColumn(id) {
   }
   state.columns = state.columns.filter(c => c.id !== id);
   await dbDelete('columns', id);
+  await emitOp(col.boardId, 'column.delete', { id });
   syncToServer('deleteColumn', { id });
   renderBoardView();
   renderBacklog();
@@ -654,6 +930,7 @@ async function createCard(boardId, columnId, data = {}) {
     toColId: columnId,
     toColName: colName(columnId),
   });
+  await emitOp(boardId, 'card.create', { ...card });
   syncToServer('upsertCard', card);
   renderBoardView();
   renderBacklog();
@@ -678,6 +955,7 @@ async function updateCard(id, updates) {
       toColId: card.columnId,
       toColName: colName(card.columnId),
     });
+    await emitOp(card.boardId, 'card.move', { ...card });
   } else if ('dueDate' in updates && updates.dueDate !== oldDue) {
     await recordActivity(card.boardId, id, 'due_set', {
       cardTitle: card.title,
@@ -685,12 +963,14 @@ async function updateCard(id, updates) {
       toColId: card.columnId,
       toColName: colName(card.columnId),
     });
+    await emitOp(card.boardId, 'card.update', { ...card });
   } else {
     await recordActivity(card.boardId, id, 'updated', {
       cardTitle: card.title,
       toColId: card.columnId,
       toColName: colName(card.columnId),
     });
+    await emitOp(card.boardId, 'card.update', { ...card });
   }
   syncToServer('upsertCard', card);
   renderBoardView();
@@ -710,6 +990,7 @@ async function deleteCard(id) {
   }
   state.cards = state.cards.filter(c => c.id !== id);
   await dbDelete('cards', id);
+  if (card) await emitOp(card.boardId, 'card.delete', { id });
   syncToServer('deleteCard', { id });
   renderBoardView();
   renderBacklog();
@@ -741,6 +1022,7 @@ async function moveCard(cardId, targetColumnId, targetOrder) {
       toColName: colName(targetColumnId),
     });
   }
+  await emitOp(card.boardId, 'card.move', { ...card });
   syncToServer('upsertCard', card);
   renderBoardView();
   renderBacklog();
