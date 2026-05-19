@@ -1,8 +1,8 @@
 /**
- * FlowBoard Cloudflare Worker
+ * FlowBoard Cloudflare Worker — D1 backend
  *
- * KV key scheme:  SHA-256(boardId + ":" + password)  →  JSON board data
- * TTL: 90 days (7,776,000 seconds) — resets on every read or write
+ * Replaces KV with D1 (SQLite). API surface identical to KV version.
+ * TTL enforced by scheduled cron (0 3 * * *) pruning rows older than 90 days.
  *
  * ── Legacy endpoints (full-state sync, unchanged) ────────────────────────────
  *   POST /api/board/get               — fetch board  { boardId, keyHash }
@@ -16,23 +16,13 @@
  *   POST /api/crdt/state/get          — materialized { boardId, keyHash }
  *   POST /api/crdt/state/snapshot     — force snapshot (GC old ops) { boardId, keyHash }
  *
- * CRDT KV key scheme:
- *   ops:{keyHash}       → JSON array of all operations, sorted by ts ascending
- *   snap:{keyHash}      → materialized board state (boards/columns/cards/activity)
- *   snapts:{keyHash}    → timestamp of last snapshot (used for GC)
- *
- * Each operation: { opId, type, ts, clientId, boardId, payload }
- * Op types: card.create | card.update | card.move | card.delete |
- *            column.create | column.update | column.delete | board.update |
- *            activity.create
- *
- * Conflict resolution: last-write-wins per entity field, using op.ts.
- * Op log is append-only. GC: ops older than 30 days are pruned on snapshot.
- *
- * KV namespace binding: BOARDS  (configure in wrangler.toml)
+ * D1 binding: flowboard_db  (configure in wrangler.toml)
+ * Schema:     migrations/schema.sql
  */
 
-const TTL_SECONDS = 90 * 24 * 60 * 60; // 90 days
+const TTL_MS           = 90 * 24 * 60 * 60 * 1000;  // 90 days
+const GC_MAX_AGE_MS    = 30 * 24 * 60 * 60 * 1000;  // prune ops > 30 days on snapshot
+const SNAPSHOT_EVERY   = 200;                         // auto-snapshot every N ops
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -59,15 +49,10 @@ function err(msg, status = 400) {
 function applyOp(state, op) {
   const { type, ts, payload } = op;
 
-  // Helper: LWW merge — per-field ts stored in __ts sub-object
   function lwwMerge(existing, incoming, opTs) {
     if (!existing) return { ...incoming, __ts: opTs };
     const merged = { ...existing };
-    const fieldTs = existing.__ts || 0;
-    // For simplicity, use single entity-level ts (sufficient for kanban use case)
-    if (opTs >= fieldTs) {
-      Object.assign(merged, incoming, { __ts: opTs });
-    }
+    if (opTs >= (existing.__ts || 0)) Object.assign(merged, incoming, { __ts: opTs });
     return merged;
   }
 
@@ -86,8 +71,9 @@ function applyOp(state, op) {
     case 'column.delete': {
       const { id } = payload;
       // Mark deleted — don't remove so we can ignore future stale ops
-      if (state.columns[id]) state.columns[id] = { ...state.columns[id], __deleted: true, __ts: ts };
-      else state.columns[id] = { id, __deleted: true, __ts: ts };
+      state.columns[id] = state.columns[id]
+        ? { ...state.columns[id], __deleted: true, __ts: ts }
+        : { id, __deleted: true, __ts: ts };
       break;
     }
     case 'card.create':
@@ -99,8 +85,9 @@ function applyOp(state, op) {
     }
     case 'card.delete': {
       const { id } = payload;
-      if (state.cards[id]) state.cards[id] = { ...state.cards[id], __deleted: true, __ts: ts };
-      else state.cards[id] = { id, __deleted: true, __ts: ts };
+      state.cards[id] = state.cards[id]
+        ? { ...state.cards[id], __deleted: true, __ts: ts }
+        : { id, __deleted: true, __ts: ts };
       break;
     }
     case 'activity.create': {
@@ -111,8 +98,6 @@ function applyOp(state, op) {
       }
       break;
     }
-    default:
-      break;
   }
 }
 
@@ -139,242 +124,298 @@ function materialize(mapState) {
   };
 }
 
-// ── CRDT KV helpers ───────────────────────────────────────────────────────────
+// ── D1 helpers ────────────────────────────────────────────────────────────────
 
-const CRDT_TTL = TTL_SECONDS;
-const GC_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // prune ops older than 30 days on snapshot
-const SNAPSHOT_INTERVAL_OPS = 200; // auto-snapshot every N ops to keep KV values small
+const now = () => Date.now();
 
-async function crdtGetOps(env, keyHash) {
-  const raw = await env.BOARDS.get(`ops:${keyHash}`);
-  if (!raw) return [];
-  try { return JSON.parse(raw); } catch { return []; }
+// ---- Legacy boards table ----
+
+async function boardGet(db, keyHash) {
+  const row = await db.prepare(
+    'SELECT data FROM boards WHERE key_hash = ?'
+  ).bind(keyHash).first();
+  return row ? JSON.parse(row.data) : null;
 }
 
-async function crdtPutOps(env, keyHash, ops) {
-  await env.BOARDS.put(`ops:${keyHash}`, JSON.stringify(ops), { expirationTtl: CRDT_TTL });
+async function boardPut(db, keyHash, data) {
+  await db.prepare(
+    `INSERT INTO boards (key_hash, data, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(key_hash) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`
+  ).bind(keyHash, JSON.stringify(data), now()).run();
 }
 
-async function crdtGetSnap(env, keyHash) {
-  const raw = await env.BOARDS.get(`snap:${keyHash}`);
-  if (!raw) return null;
-  try { return JSON.parse(raw); } catch { return null; }
+async function boardTouch(db, keyHash) {
+  await db.prepare(
+    'UPDATE boards SET updated_at = ? WHERE key_hash = ?'
+  ).bind(now(), keyHash).run();
 }
 
-async function crdtPutSnap(env, keyHash, mapState, snapTs) {
-  await env.BOARDS.put(`snap:${keyHash}`, JSON.stringify(mapState), { expirationTtl: CRDT_TTL });
-  await env.BOARDS.put(`snapts:${keyHash}`, String(snapTs), { expirationTtl: CRDT_TTL });
+// ---- CRDT ops table ----
+
+async function opsGet(db, keyHash) {
+  const { results } = await db.prepare(
+    'SELECT op_id, type, ts, client_id, payload FROM crdt_ops WHERE key_hash = ? ORDER BY ts ASC'
+  ).bind(keyHash).all();
+  return results.map(r => ({
+    opId:     r.op_id,
+    type:     r.type,
+    ts:       r.ts,
+    clientId: r.client_id,
+    payload:  JSON.parse(r.payload),
+  }));
 }
 
-async function crdtGetSnapTs(env, keyHash) {
-  const raw = await env.BOARDS.get(`snapts:${keyHash}`);
-  return raw ? parseInt(raw, 10) : 0;
+async function opsGetSince(db, keyHash, since) {
+  const { results } = await db.prepare(
+    'SELECT op_id, type, ts, client_id, payload FROM crdt_ops WHERE key_hash = ? AND ts > ? ORDER BY ts ASC'
+  ).bind(keyHash, since).all();
+  return results.map(r => ({
+    opId:     r.op_id,
+    type:     r.type,
+    ts:       r.ts,
+    clientId: r.client_id,
+    payload:  JSON.parse(r.payload),
+  }));
 }
 
-// Build full map-state: start from snapshot, replay any ops after it
-async function crdtBuildState(env, keyHash) {
-  const [snap, ops, snapTs] = await Promise.all([
-    crdtGetSnap(env, keyHash),
-    crdtGetOps(env, keyHash),
-    crdtGetSnapTs(env, keyHash),
+async function opsCount(db, keyHash) {
+  const row = await db.prepare(
+    'SELECT COUNT(*) AS cnt FROM crdt_ops WHERE key_hash = ?'
+  ).bind(keyHash).first();
+  return row ? row.cnt : 0;
+}
+
+// Insert new ops — skip existing opIds (idempotent)
+async function opsInsert(db, keyHash, ops) {
+  if (!ops.length) return;
+  const ts = now();
+  // D1 batch: up to 100 statements per batch is fine for typical op counts
+  const stmts = ops.map(op =>
+    db.prepare(
+      `INSERT OR IGNORE INTO crdt_ops (op_id, key_hash, type, ts, client_id, payload, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(op.opId, keyHash, op.type, op.ts, op.clientId ?? null, JSON.stringify(op.payload), ts)
+  );
+  await db.batch(stmts);
+}
+
+async function opsDeleteOlderThan(db, keyHash, cutoffTs) {
+  await db.prepare(
+    'DELETE FROM crdt_ops WHERE key_hash = ? AND ts < ?'
+  ).bind(keyHash, cutoffTs).run();
+}
+
+// ---- CRDT snapshots table ----
+
+async function snapGet(db, keyHash) {
+  const row = await db.prepare(
+    'SELECT snap, snap_ts FROM crdt_snapshots WHERE key_hash = ?'
+  ).bind(keyHash).first();
+  if (!row) return null;
+  return { mapState: JSON.parse(row.snap), snapTs: row.snap_ts };
+}
+
+async function snapPut(db, keyHash, mapState, snapTs) {
+  await db.prepare(
+    `INSERT INTO crdt_snapshots (key_hash, snap, snap_ts, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(key_hash) DO UPDATE SET snap = excluded.snap, snap_ts = excluded.snap_ts, updated_at = excluded.updated_at`
+  ).bind(keyHash, JSON.stringify(mapState), snapTs, now()).run();
+}
+
+// Build current map-state: snapshot + replay newer ops
+async function buildState(db, keyHash) {
+  const [snapRow, ops] = await Promise.all([
+    snapGet(db, keyHash),
+    opsGet(db, keyHash),
   ]);
 
-  let mapState = snap || { boards: {}, columns: {}, cards: {}, activity: {} };
+  if (!snapRow) {
+    // No snapshot — replay everything
+    return replayOps(ops);
+  }
 
   // Only replay ops newer than the snapshot
-  const newOps = ops.filter(o => o.ts > snapTs || !snap);
+  const { mapState, snapTs } = snapRow;
+  const newOps = ops.filter(o => o.ts > snapTs);
   const sorted = newOps.sort((a, b) => a.ts - b.ts || a.opId.localeCompare(b.opId));
-  for (const op of sorted) applyOp(mapState, op);
-
-  return { mapState, ops, snapTs };
+  const state = { ...mapState };
+  for (const op of sorted) applyOp(state, op);
+  return state;
 }
 
-// Force a snapshot: replay all ops, persist map-state, prune old ops
-async function crdtSnapshot(env, keyHash) {
-  const ops = await crdtGetOps(env, keyHash);
+// Force snapshot + prune old ops (GC)
+async function doSnapshot(db, keyHash) {
+  const ops = await opsGet(db, keyHash);
   const mapState = replayOps(ops);
-  const nowTs = Date.now();
+  const snapTs   = now();
 
   // Prune ops older than GC_MAX_AGE_MS
-  const keptOps = ops.filter(o => nowTs - o.ts < GC_MAX_AGE_MS);
+  const cutoff = snapTs - GC_MAX_AGE_MS;
 
-  await crdtPutSnap(env, keyHash, mapState, nowTs);
-  await crdtPutOps(env, keyHash, keptOps);
+  await Promise.all([
+    snapPut(db, keyHash, mapState, snapTs),
+    opsDeleteOlderThan(db, keyHash, cutoff),
+  ]);
+
   return mapState;
+}
+
+// ── Request handler ───────────────────────────────────────────────────────────
+
+async function handleRequest(request, env) {
+  const url  = new URL(request.url);
+  const path = url.pathname;
+
+  if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
+
+  // Invite link — no auth needed, just echo boardId
+  const inviteMatch = path.match(/^\/api\/invite\/([^/]+)$/);
+  if (inviteMatch) return json({ boardId: decodeURIComponent(inviteMatch[1]) });
+
+  if (request.method !== 'POST') return err('Method not allowed', 405);
+
+  let body;
+  try { body = await request.json(); } catch { return err('Invalid JSON body'); }
+
+  const { boardId, keyHash } = body;
+  if (!boardId || !keyHash)            return err('boardId and keyHash required');
+  if (!/^[0-9a-f]{64}$/.test(keyHash)) return err('Invalid keyHash');
+
+  const db = env.flowboard_db;
+
+  // ── GET board ──────────────────────────────────────────
+  if (path === '/api/board/get') {
+    let data = await boardGet(db, keyHash);
+
+    if (!data) {
+      // Legacy boards table is empty — board may exist only in CRDT tables.
+      // Materialise from CRDT state, write back to boards table so future
+      // legacy reads (and join attempts) succeed without a second round-trip.
+      const count = await opsCount(db, keyHash);
+      const snapRow = count ? null : await snapGet(db, keyHash);
+
+      if (count || snapRow) {
+        const mapState = count ? await buildState(db, keyHash) : snapRow.mapState;
+        data = materialize(mapState);
+        // Persist so the legacy path is warm for subsequent reads
+        await boardPut(db, keyHash, data);
+      }
+    }
+
+    if (!data) return json({ found: false });
+    await boardTouch(db, keyHash);
+    return json({ found: true, data });
+  }
+
+  // ── PUT board ──────────────────────────────────────────
+  if (path === '/api/board/put') {
+    const { data } = body;
+    if (!data) return err('data required');
+    await boardPut(db, keyHash, data);
+    return json({ ok: true });
+  }
+
+  // ── TOUCH ──────────────────────────────────────────────
+  if (path === '/api/board/touch') {
+    const data = await boardGet(db, keyHash);
+    if (!data) return json({ found: false });
+    await boardTouch(db, keyHash);
+    return json({ ok: true });
+  }
+
+  // ── CRDT push ops ──────────────────────────────────────
+  if (path === '/api/crdt/ops/push') {
+    const { ops: incoming } = body;
+    if (!Array.isArray(incoming)) return err('ops must be an array');
+    if (!incoming.length)         return json({ ok: true, opsAccepted: 0 });
+
+    for (const op of incoming) {
+      if (!op.opId || !op.type || typeof op.ts !== 'number' || !op.payload)
+        return err('each op needs opId, type, ts (number), payload');
+    }
+
+    // Fetch existing opIds for this board to deduplicate
+    const { results: existing } = await db.prepare(
+      'SELECT op_id FROM crdt_ops WHERE key_hash = ?'
+    ).bind(keyHash).all();
+    const existingIds = new Set(existing.map(r => r.op_id));
+
+    const newOps = incoming.filter(o => !existingIds.has(o.opId));
+    await opsInsert(db, keyHash, newOps);
+
+    const totalOps    = (existing.length + newOps.length);
+    const snapshotNow = totalOps > 0 && totalOps % SNAPSHOT_EVERY < newOps.length;
+    let snapshotTaken = false;
+
+    if (snapshotNow) {
+      await doSnapshot(db, keyHash);
+      snapshotTaken = true;
+    }
+
+    return json({ ok: true, opsAccepted: newOps.length, totalOps, snapshotTaken });
+  }
+
+  // ── CRDT pull ops since ────────────────────────────────
+  if (path === '/api/crdt/ops/pull') {
+    const since = typeof body.since === 'number' ? body.since : 0;
+    const ops   = await opsGetSince(db, keyHash, since);
+    return json({ ops });
+  }
+
+  // ── CRDT materialized state ────────────────────────────
+  if (path === '/api/crdt/state/get') {
+    const count = await opsCount(db, keyHash);
+    if (!count) {
+      const snapRow = await snapGet(db, keyHash);
+      if (!snapRow) return json({ found: false });
+      return json({ found: true, data: materialize(snapRow.mapState) });
+    }
+    const mapState = await buildState(db, keyHash);
+    return json({ found: true, data: materialize(mapState) });
+  }
+
+  // ── CRDT force snapshot ────────────────────────────────
+  if (path === '/api/crdt/state/snapshot') {
+    const count = await opsCount(db, keyHash);
+    if (!count) return json({ ok: true, opsKept: 0 });
+    await doSnapshot(db, keyHash);
+    const kept = await opsCount(db, keyHash);
+    return json({ ok: true, opsKept: kept });
+  }
+
+  return err('Not found', 404);
+}
+
+// ── Scheduled cron — prune rows older than 90 days ───────────────────────────
+
+async function handleScheduled(env) {
+  const cutoff = Date.now() - TTL_MS;
+  const db = env.flowboard_db;
+  await Promise.all([
+    db.prepare('DELETE FROM boards WHERE updated_at < ?').bind(cutoff).run(),
+    db.prepare('DELETE FROM crdt_ops WHERE updated_at < ?').bind(cutoff).run(),
+    db.prepare('DELETE FROM crdt_snapshots WHERE updated_at < ?').bind(cutoff).run(),
+  ]);
 }
 
 export default {
   async fetch(request, env) {
     try {
-      const url = new URL(request.url);
-      const path = url.pathname;
-
-      // CORS preflight
-      if (request.method === 'OPTIONS') {
-        return new Response(null, { status: 204, headers: CORS });
-      }
-
-      // ── Invite link resolution ────────────────────────────
-      // Just confirms the boardId exists in KV (any key with that prefix)
-      const inviteMatch = path.match(/^\/api\/invite\/([^/]+)$/);
-      if (inviteMatch) {
-        const boardId = decodeURIComponent(inviteMatch[1]);
-        // We can't verify without the password — just echo the boardId back
-        return json({ boardId });
-      }
-
-      // ── Require POST + JSON body from here ────────────────
-      if (request.method !== 'POST') return err('Method not allowed', 405);
-
-      let body;
-      try { body = await request.json(); }
-      catch { return err('Invalid JSON body'); }
-
-      const { boardId, keyHash } = body;
-      if (!boardId || !keyHash) return err('boardId and keyHash required');
-
-      // Validate keyHash format (64-char hex SHA-256)
-      if (!/^[0-9a-f]{64}$/.test(keyHash)) return err('Invalid keyHash');
-
-      const kvKey = keyHash; // KV key IS the hash — boardId never stored as key
-
-      // ── GET board ─────────────────────────────────────────
-      if (path === '/api/board/get') {
-        const raw = await env.BOARDS.get(kvKey);
-        if (!raw) return json({ found: false });
-
-        // Touch TTL on read
-        await env.BOARDS.put(kvKey, raw, { expirationTtl: TTL_SECONDS });
-
-        let data;
-        try { data = JSON.parse(raw); } catch { return err('Corrupt board data', 500); }
-        return json({ found: true, data });
-      }
-
-      // ── PUT board ─────────────────────────────────────────
-      if (path === '/api/board/put') {
-        const { data } = body;
-        if (!data) return err('data required');
-        await env.BOARDS.put(kvKey, JSON.stringify(data), { expirationTtl: TTL_SECONDS });
-        return json({ ok: true });
-      }
-
-      // ── TOUCH (renew TTL without full sync) ───────────────
-      if (path === '/api/board/touch') {
-        const raw = await env.BOARDS.get(kvKey);
-        if (!raw) return json({ found: false });
-        await env.BOARDS.put(kvKey, raw, { expirationTtl: TTL_SECONDS });
-        return json({ ok: true });
-      }
-
-      // ── CRDT: Push ops ────────────────────────────────────
-      // Body: { boardId, keyHash, ops: [{ opId, type, ts, clientId, payload }, ...] }
-      // Returns: { ok, opsAccepted, totalOps, snapshotTaken }
-      if (path === '/api/crdt/ops/push') {
-        const { ops: incoming } = body;
-        if (!Array.isArray(incoming)) return err('ops must be an array');
-        if (incoming.length === 0) return json({ ok: true, opsAccepted: 0 });
-
-        // Validate each op has required fields
-        for (const op of incoming) {
-          if (!op.opId || !op.type || !op.ts || !op.payload) {
-            return err('each op needs opId, type, ts, payload');
-          }
-          // Ensure ts is a number
-          if (typeof op.ts !== 'number') return err('op.ts must be a number');
-        }
-
-        // Load existing ops
-        const existingOps = await crdtGetOps(env, kvKey);
-        const existingIds = new Set(existingOps.map(o => o.opId));
-
-        // Deduplicate — idempotent: same opId already present = skip
-        const newOps = incoming.filter(o => !existingIds.has(o.opId));
-
-        const merged = [...existingOps, ...newOps].sort((a, b) => a.ts - b.ts);
-        await crdtPutOps(env, kvKey, merged);
-
-        // Auto-snapshot to keep KV sizes manageable
-        let snapshotTaken = false;
-        if (merged.length % SNAPSHOT_INTERVAL_OPS < newOps.length) {
-          await crdtSnapshot(env, kvKey);
-          snapshotTaken = true;
-        } else {
-          // Touch TTL on snapshot too
-          const snap = await crdtGetSnap(env, kvKey);
-          if (snap) {
-            const snapTs = await crdtGetSnapTs(env, kvKey);
-            await crdtPutSnap(env, kvKey, snap, snapTs);
-          }
-        }
-
-        return json({ ok: true, opsAccepted: newOps.length, totalOps: merged.length, snapshotTaken });
-      }
-
-      // ── CRDT: Pull ops since timestamp ────────────────────
-      // Body: { boardId, keyHash, since: <ts ms> }
-      // Returns: { ops: [...] } — only ops with ts > since, sorted ascending
-      if (path === '/api/crdt/ops/pull') {
-        const since = typeof body.since === 'number' ? body.since : 0;
-
-        const ops = await crdtGetOps(env, kvKey);
-        if (!ops.length) return json({ ops: [] });
-
-        // Touch TTL
-        await crdtPutOps(env, kvKey, ops);
-
-        const filtered = ops
-          .filter(o => o.ts > since)
-          .sort((a, b) => a.ts - b.ts);
-
-        return json({ ops: filtered });
-      }
-
-      // ── CRDT: Get materialized state ──────────────────────
-      // Body: { boardId, keyHash }
-      // Returns: { found, data: { boards, columns, cards, activity } }
-      // Use this on first join / full re-sync instead of replaying ops from zero.
-      if (path === '/api/crdt/state/get') {
-        const ops = await crdtGetOps(env, kvKey);
-        if (!ops.length) {
-          const snap = await crdtGetSnap(env, kvKey);
-          if (!snap) return json({ found: false });
-          return json({ found: true, data: materialize(snap) });
-        }
-
-        const { mapState } = await crdtBuildState(env, kvKey);
-        const data = materialize(mapState);
-        return json({ found: true, data });
-      }
-
-      // ── CRDT: Force snapshot (maintenance / GC) ───────────
-      // Body: { boardId, keyHash }
-      // Returns: { ok, opsKept }
-      if (path === '/api/crdt/state/snapshot') {
-        const ops = await crdtGetOps(env, kvKey);
-        if (!ops.length) return json({ ok: true, opsKept: 0 });
-
-        await crdtSnapshot(env, kvKey);
-        const keptOps = await crdtGetOps(env, kvKey);
-        return json({ ok: true, opsKept: keptOps.length });
-      }
-
-      return err('Not found', 404);
+      return await handleRequest(request, env);
     } catch (e) {
-      console.log(e);
-      return new Response(
-        JSON.stringify({
-          error: e.message,
-          stack: e.stack,
-        }),
-        {
-          status: 500,
-          headers: {
-            'Content-Type': 'application/json',
-            ...CORS,
-          },
-        }
-      );
+      console.error(e);
+      return new Response(JSON.stringify({ error: e.message, stack: e.stack }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json', ...CORS },
+      });
+    }
+  },
+
+  async scheduled(_event, env) {
+    try {
+      await handleScheduled(env);
+    } catch (e) {
+      console.error('Scheduled prune failed:', e);
     }
   },
 };
