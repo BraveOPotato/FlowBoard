@@ -2,6 +2,10 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useFlowStore } from '../store/useFlowStore';
 import type { View } from '../types';
 
+const headerBtn = "bg-transparent border-none text-[var(--text2)] cursor-pointer w-8 h-8 rounded-lg text-[15px] flex items-center justify-center transition-colors duration-150 hover:bg-[var(--bg3)] hover:text-[var(--text)]";
+const mobileActionBtn = "block w-full text-left bg-[var(--bg3)] border border-[var(--border)] text-[var(--text)] px-3 py-2.5 rounded-lg cursor-pointer text-[13px] font-[var(--font-body)] transition-colors duration-150 mt-1.5 hover:border-[var(--accent)] hover:bg-[var(--bg4)]";
+const sectionLabel = "text-[10px] font-bold tracking-[0.8px] uppercase text-[var(--text3)] font-[var(--font-mono)] mb-2";
+
 export function Header() {
   const store = useFlowStore();
   const boards = useFlowStore((s) => s.boards);
@@ -40,9 +44,7 @@ export function Header() {
   useEffect(() => {
     if (!menuOpen) return;
     const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
-      }
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
@@ -51,46 +53,45 @@ export function Header() {
   const toggleSearch = () => {
     const next = !searchVisible;
     setSearchVisible(next);
-    if (!next) {
-      setSearchVal('');
-      store.setSearchQuery('');
-    } else {
-      setTimeout(() => searchRef.current?.focus(), 50);
-    }
+    if (!next) { setSearchVal(''); store.setSearchQuery(''); }
+    else setTimeout(() => searchRef.current?.focus(), 50);
   };
 
   return (
     <>
-      <header id="header">
-        {/* Desktop: logo + board tabs + add board */}
+      <header
+        id="header"
+        className="h-[var(--header-h)] bg-[var(--bg2)] border-b border-[var(--border)] flex items-center gap-2 px-3 flex-shrink-0 overflow-hidden"
+      >
+        {/* Desktop: logo */}
         <span
           id="logo"
-          className="desktop-only"
+          className="hidden sm:flex font-[var(--font-display)] font-extrabold text-base flex-shrink-0 tracking-tight"
           style={{ background: 'linear-gradient(135deg, var(--logo-a), var(--logo-b))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}
         >
           FlowBoard
         </span>
-        <div id="board-tabs" role="tablist" className="desktop-only">
+
+        {/* Desktop: board tabs */}
+        <div id="board-tabs" className="hidden sm:flex gap-1 overflow-x-auto flex-1 min-w-0">
           {boards.map((b) => (
             <div
               key={b.id}
               role="tab"
               aria-selected={b.id === activeBoardId}
-              className={`board-tab${b.id === activeBoardId ? ' active' : ''}`}
+              className={`group px-2.5 py-1 rounded-md cursor-pointer text-xs font-medium whitespace-nowrap flex items-center gap-1 transition-colors duration-150 ${
+                b.id === activeBoardId
+                  ? 'bg-[var(--accent-glow)] text-[var(--accent2)]'
+                  : 'text-[var(--text2)] hover:bg-[var(--bg3)] hover:text-[var(--text)]'
+              }`}
               onClick={() => store.setActiveBoard(b.id)}
-              onDoubleClick={() => {
-                const n = prompt('Rename board:', b.name);
-                if (n?.trim()) store.renameBoard(b.id, n.trim());
-              }}
+              onDoubleClick={() => { const n = prompt('Rename board:', b.name); if (n?.trim()) store.renameBoard(b.id, n.trim()); }}
               title="Double-click to rename"
             >
               {b.name}
               <span
-                className="board-tab-del"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (confirm(`Delete "${b.name}"?`)) store.deleteBoard(b.id);
-                }}
+                className="opacity-0 group-hover:opacity-100 text-sm leading-none cursor-pointer text-[var(--text3)] transition-opacity duration-150"
+                onClick={(e) => { e.stopPropagation(); if (confirm(`Delete "${b.name}"?`)) store.deleteBoard(b.id); }}
                 title="Delete board"
               >
                 ×
@@ -98,24 +99,42 @@ export function Header() {
             </div>
           ))}
         </div>
-        <button id="add-board-btn" className="desktop-only" onClick={() => store.openModal('addBoard', {})} aria-label="New board" title="New board">
+
+        {/* Desktop: add board */}
+        <button
+          id="add-board-btn"
+          className="hidden sm:flex bg-transparent border border-[var(--border2)] text-[var(--text2)] w-6 h-6 rounded-md cursor-pointer text-base items-center justify-center flex-shrink-0 transition-colors duration-150 hover:border-[var(--accent)] hover:text-[var(--accent)]"
+          onClick={() => store.openModal('addBoard', {})}
+          aria-label="New board"
+          title="New board"
+        >
           +
         </button>
-        <div className="header-spacer desktop-only" />
 
-        {/* Mobile: hamburger button */}
-        <button id="hamburger-btn" className="mobile-only header-btn" onClick={() => setMenuOpen(true)} aria-label="Menu">
+        <div className="hidden sm:flex flex-1" />
+
+        {/* Mobile: hamburger */}
+        <button
+          id="hamburger-btn"
+          className={`flex sm:hidden ${headerBtn} text-xl px-1`}
+          onClick={() => setMenuOpen(true)}
+          aria-label="Menu"
+        >
           ☰
         </button>
 
         {/* View tabs */}
-        <div className="view-tabs" role="tablist">
+        <div className="flex gap-0.5 bg-[var(--bg3)] rounded-lg p-0.5 flex-shrink-0" role="tablist">
           {(['board', 'calendar', 'timeline'] as View[]).map((v) => (
             <div
               key={v}
               role="tab"
               aria-selected={activeView === v}
-              className={`view-tab${activeView === v ? ' active' : ''}`}
+              className={`px-2.5 py-1 rounded-md cursor-pointer text-xs font-medium transition-colors duration-150 ${
+                activeView === v
+                  ? 'bg-[var(--surface)] text-[var(--text)]'
+                  : 'text-[var(--text2)] hover:text-[var(--text)]'
+              }`}
               onClick={() => store.setActiveView(v)}
             >
               {v.charAt(0).toUpperCase() + v.slice(1)}
@@ -124,70 +143,72 @@ export function Header() {
         </div>
 
         {/* Desktop: actions */}
-        <div id="header-actions" className="desktop-only">
-          <button className="header-btn" onClick={toggleSearch} aria-label="Search (/)" title="Search (/)">
-            🔍
-          </button>
+        <div className="hidden sm:flex items-center gap-1 flex-shrink-0">
+          <button className={headerBtn} onClick={toggleSearch} aria-label="Search (/)" title="Search (/)">🔍</button>
           <div
-            id="server-status"
-            className={workerStatus ? 'ok' : 'err'}
+            className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-[var(--font-mono)] cursor-pointer transition-colors duration-150 hover:bg-[var(--bg3)]"
             onClick={() => store.openModal('settings', {})}
             title="Click to open settings"
           >
-            <div className="dot" />
-            <span id="server-status-text">{workerStatus ? 'connected' : 'local'}</span>
+            <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: workerStatus ? 'var(--green)' : 'var(--text3)' }} />
+            <span className="text-[var(--text3)]">{workerStatus ? 'connected' : 'local'}</span>
           </div>
-          <button className="header-btn" onClick={() => store.openModal('theme', {})} aria-label="Switch theme" title="Switch theme">
-            🎨
-          </button>
-          <button className="header-btn" onClick={() => store.openModal('settings', {})} aria-label="Settings" title="Settings">
-            ⚙
-          </button>
+          <button className={headerBtn} onClick={() => store.openModal('theme', {})} aria-label="Switch theme" title="Switch theme">🎨</button>
+          <button className={headerBtn} onClick={() => store.openModal('settings', {})} aria-label="Settings" title="Settings">⚙</button>
         </div>
       </header>
 
-      {/* Desktop search bar */}
+      {/* Search bar */}
       {searchVisible && (
-        <div id="search-bar">
+        <div className="bg-[var(--bg2)] border-b border-[var(--border)] px-4 py-2 flex-shrink-0 max-sm:px-2 max-sm:py-1.5">
           <input
             ref={searchRef}
             id="search-input"
             value={searchVal}
-            onChange={(e) => {
-              setSearchVal(e.target.value);
-              store.setSearchQuery(e.target.value);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') {
-                setSearchVisible(false);
-                setSearchVal('');
-                store.setSearchQuery('');
-              }
-            }}
+            onChange={(e) => { setSearchVal(e.target.value); store.setSearchQuery(e.target.value); }}
+            onKeyDown={(e) => { if (e.key === 'Escape') { setSearchVisible(false); setSearchVal(''); store.setSearchQuery(''); } }}
             placeholder="Search cards by title, tag, description..."
             autoComplete="off"
+            className="w-full bg-[var(--bg3)] border border-[var(--border2)] text-[var(--text)] rounded-lg px-3 py-2 text-[13px] font-[var(--font-body)] outline-none transition-colors duration-150 focus:border-[var(--accent)]"
           />
         </div>
       )}
 
       {/* Mobile slide-in menu */}
       {menuOpen && (
-        <div id="mobile-menu-overlay" onClick={() => setMenuOpen(false)}>
-          <div id="mobile-menu" ref={menuRef} onClick={(e) => e.stopPropagation()}>
-            <div id="mobile-menu-header">
+        <div
+          id="mobile-menu-overlay"
+          className="fixed inset-0 bg-black/55 z-[3000] flex items-stretch"
+          onClick={() => setMenuOpen(false)}
+        >
+          <div
+            id="mobile-menu"
+            ref={menuRef}
+            className="w-[min(300px,85vw)] bg-[var(--surface)] border-r border-[var(--border2)] flex flex-col overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Menu header */}
+            <div className="flex items-center justify-between p-4 border-b border-[var(--border)] flex-shrink-0">
               <span
-                id="mobile-menu-logo"
+                className="font-[var(--font-display)] font-extrabold text-lg"
                 style={{ background: 'linear-gradient(135deg, var(--logo-a), var(--logo-b))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}
               >
                 FlowBoard
               </span>
-              <button id="mobile-menu-close" onClick={() => setMenuOpen(false)} aria-label="Close menu">✕</button>
+              <button
+                className="bg-transparent border-none text-[var(--text3)] cursor-pointer text-lg px-2 py-1 rounded-md transition-colors duration-150 hover:text-[var(--text)] hover:bg-[var(--bg3)]"
+                onClick={() => setMenuOpen(false)}
+                aria-label="Close menu"
+              >
+                ✕
+              </button>
             </div>
 
-            <div className="mobile-menu-section">
-              <div className="mobile-menu-section-label">Search</div>
+            {/* Search */}
+            <div className="px-4 py-3 border-b border-[var(--border)]">
+              <div className={sectionLabel}>Search</div>
               <input
-                className="form-input"
+                className="w-full bg-[var(--bg3)] border border-[var(--border2)] text-[var(--text)] rounded-[var(--radius)] px-2.5 py-2 text-[13px] font-[var(--font-body)] outline-none transition-colors duration-150 focus:border-[var(--accent)]"
                 value={menuSearch}
                 onChange={(e) => { setMenuSearch(e.target.value); store.setSearchQuery(e.target.value); }}
                 placeholder="Search cards..."
@@ -195,44 +216,46 @@ export function Header() {
               />
             </div>
 
-            <div className="mobile-menu-section">
-              <div className="mobile-menu-section-label">Boards</div>
-              {boards.length === 0 && <div className="mobile-menu-empty">No boards yet</div>}
+            {/* Boards */}
+            <div className="px-4 py-3 border-b border-[var(--border)]">
+              <div className={sectionLabel}>Boards</div>
+              {boards.length === 0 && <div className="text-xs text-[var(--text3)] pt-1 pb-2">No boards yet</div>}
               {boards.map((b) => (
                 <div
                   key={b.id}
-                  className={`mobile-menu-board-item${b.id === activeBoardId ? ' active' : ''}`}
+                  className={`flex items-center gap-2 px-2.5 py-2.5 rounded-lg cursor-pointer transition-colors duration-150 mb-1 ${b.id === activeBoardId ? 'bg-[var(--accent-glow)]' : 'hover:bg-[var(--bg3)]'}`}
                   onClick={() => { store.setActiveBoard(b.id); setMenuOpen(false); }}
                 >
-                  <span className="mobile-menu-board-name">{b.name}</span>
-                  {b.id === activeBoardId && <span className="mobile-menu-board-check">✓</span>}
+                  <span className="flex-1 text-[13px] text-[var(--text)] font-medium">{b.name}</span>
+                  {b.id === activeBoardId && <span className="text-xs text-[var(--accent2)]">✓</span>}
                   <span
-                    className="mobile-menu-board-del"
+                    className="text-[13px] text-[var(--text3)] px-1 py-0.5 rounded transition-colors duration-150 hover:text-[var(--red)] hover:bg-red-500/10"
                     onClick={(e) => { e.stopPropagation(); if (confirm(`Delete "${b.name}"?`)) { store.deleteBoard(b.id); setMenuOpen(false); } }}
                   >✕</span>
                 </div>
               ))}
-              <button className="mobile-menu-action-btn" onClick={() => { store.openModal('addBoard', {}); setMenuOpen(false); }}>
+              <button className={mobileActionBtn} onClick={() => { store.openModal('addBoard', {}); setMenuOpen(false); }}>
                 + New Board
               </button>
             </div>
 
-            <div className="mobile-menu-section">
-              <div className="mobile-menu-section-label">Status</div>
-              <div className={`mobile-menu-status${workerStatus ? ' ok' : ' err'}`} onClick={() => { store.openModal('settings', {}); setMenuOpen(false); }}>
-                <div className="dot" />
+            {/* Status */}
+            <div className="px-4 py-3 border-b border-[var(--border)]">
+              <div className={sectionLabel}>Status</div>
+              <div
+                className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-[var(--bg3)] border border-[var(--border)] cursor-pointer text-[13px] text-[var(--text2)] transition-colors duration-150 hover:border-[var(--accent)]"
+                onClick={() => { store.openModal('settings', {}); setMenuOpen(false); }}
+              >
+                <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: workerStatus ? 'var(--green)' : 'var(--text3)' }} />
                 <span>{workerStatus ? 'Connected to server' : 'Local only'}</span>
               </div>
             </div>
 
-            <div className="mobile-menu-section">
-              <div className="mobile-menu-section-label">Options</div>
-              <button className="mobile-menu-action-btn" onClick={() => { store.openModal('theme', {}); setMenuOpen(false); }}>
-                🎨 Switch Theme
-              </button>
-              <button className="mobile-menu-action-btn" onClick={() => { store.openModal('settings', {}); setMenuOpen(false); }}>
-                ⚙ Settings
-              </button>
+            {/* Options */}
+            <div className="px-4 py-3">
+              <div className={sectionLabel}>Options</div>
+              <button className={mobileActionBtn} onClick={() => { store.openModal('theme', {}); setMenuOpen(false); }}>🎨 Switch Theme</button>
+              <button className={mobileActionBtn} onClick={() => { store.openModal('settings', {}); setMenuOpen(false); }}>⚙ Settings</button>
             </div>
           </div>
         </div>

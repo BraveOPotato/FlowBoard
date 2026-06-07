@@ -9,28 +9,13 @@ import { TimelineView } from './views/TimelineView';
 
 export function App() {
   const store = useFlowStore();
-  const activeView = store.activeView;
-  const isLoading = store.isLoading;
-  const error = store.error;
+  const { activeView, isLoading, error } = store;
 
-  useEffect(() => {
-    store.init();
-  }, []);
+  useEffect(() => { store.init(); }, []);
 
   if (isLoading) {
     return (
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          height: '100vh',
-          color: 'var(--text2)',
-          fontFamily: 'var(--font-mono)',
-          fontSize: '13px',
-          letterSpacing: '0.5px',
-        }}
-      >
+      <div className="flex items-center justify-center h-screen text-[var(--text2)] font-[var(--font-mono)] text-[13px] tracking-wide">
         Loading FlowBoard…
       </div>
     );
@@ -38,10 +23,10 @@ export function App() {
 
   if (error) {
     return (
-      <div className="empty-state" style={{ height: '100vh' }}>
-        <div className="empty-state-icon">⚠</div>
-        <div className="empty-state-title">Failed to initialize</div>
-        <div className="empty-state-text">{error}</div>
+      <div className="flex flex-col items-center justify-center h-screen gap-2 p-10">
+        <div className="text-4xl opacity-40">⚠</div>
+        <div className="text-[15px] font-semibold text-[var(--text2)] font-[var(--font-display)]">Failed to initialize</div>
+        <div className="text-xs text-[var(--text3)] text-center">{error}</div>
       </div>
     );
   }
@@ -49,14 +34,14 @@ export function App() {
   return (
     <>
       <Header />
-      <div id="main">
-        <div className={activeView === 'board' ? 'active-view' : 'hidden-view'}>
+      <div id="main" className="flex-1 overflow-hidden relative flex flex-col">
+        <div className={activeView === 'board' ? 'flex flex-col w-full h-full' : 'hidden'}>
           <BoardView />
         </div>
-        <div className={activeView === 'calendar' ? 'active-view' : 'hidden-view'}>
+        <div className={activeView === 'calendar' ? 'flex flex-col w-full h-full' : 'hidden'}>
           <CalendarView />
         </div>
-        <div className={activeView === 'timeline' ? 'active-view' : 'hidden-view'}>
+        <div className={activeView === 'timeline' ? 'flex flex-col w-full h-full' : 'hidden'}>
           <TimelineView />
         </div>
       </div>
