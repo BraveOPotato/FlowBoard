@@ -1,44 +1,48 @@
-import React from 'react';
+import { Component, type ReactNode } from 'react';
 import { useFlowStore } from '../store/useFlowStore';
+import { Icon, type IconName } from './Icon';
+import { cx } from '../utils';
+import s from './Shell.module.css';
+
+// The store's toast() takes a legacy emoji "icon"; map it to an icon + tone.
+const TOAST_KIND: Record<string, { icon: IconName; tone: string }> = {
+  '⚠': { icon: 'alert', tone: s.warning },
+  '🗑': { icon: 'trash', tone: s.neutral },
+};
 
 export function ToastContainer() {
-  const toasts = useFlowStore((s) => s.toasts);
+  const toasts = useFlowStore((st) => st.toasts);
   return (
-    <div
-      id="toast-container"
-      role="status"
-      aria-live="polite"
-      className="fixed bottom-6 left-1/2 -translate-x-1/2 flex flex-col gap-2 z-[9000] pointer-events-none max-sm:bottom-4 max-sm:left-4 max-sm:right-4 max-sm:translate-x-0"
-    >
-      {toasts.map((t) => (
-        <div key={t.id} className="toast bg-[var(--surface)] border border-[var(--border2)] rounded-lg px-3.5 py-2 flex items-center gap-2 text-xs shadow-[var(--shadow)] whitespace-nowrap max-sm:whitespace-normal">
-          <span className="text-sm">{t.icon}</span>
-          <span>{t.message}</span>
-        </div>
-      ))}
+    <div className={s.toasts} role="status" aria-live="polite">
+      {toasts.map((t) => {
+        const kind = TOAST_KIND[t.icon] ?? { icon: 'check', tone: s.success };
+        return (
+          <div key={t.id} className={s.toast}>
+            <span className={cx(s.toastIcon, kind.tone)}><Icon name={kind.icon} size={14} strokeWidth={2.2} /></span>
+            <span>{t.message}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
 
-export class ErrorBoundary extends React.Component<
-  { children: React.ReactNode },
-  { hasError: boolean; error: Error | null }
-> {
-  constructor(props: { children: React.ReactNode }) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
-  static getDerivedStateFromError(error: Error) { return { hasError: true, error }; }
+export function FullPageMessage({ title, detail }: { title: string; detail?: string }) {
+  return (
+    <div className={s.fullPage}>
+      <span className={s.fullPageIcon}><Icon name="alert" size={22} /></span>
+      <h1>{title}</h1>
+      {detail && <code>{detail}</code>}
+      <button onClick={() => location.reload()}>Reload</button>
+    </div>
+  );
+}
+
+export class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
   render() {
-    if (this.state.hasError) {
-      return (
-        <div className="flex flex-col items-center justify-center h-screen gap-2 p-10">
-          <div className="text-4xl opacity-40">⚠</div>
-          <div className="text-[15px] font-semibold text-[var(--text2)] font-[var(--font-display)]">Something went wrong</div>
-          <div className="text-xs text-[var(--text3)] text-center font-[var(--font-mono)] max-w-xl">{this.state.error?.message}</div>
-        </div>
-      );
-    }
+    if (this.state.error) return <FullPageMessage title="Something went wrong" detail={this.state.error.message} />;
     return this.props.children;
   }
 }

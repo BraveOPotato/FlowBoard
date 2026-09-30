@@ -1,0 +1,34 @@
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  height: 100dvh;
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--canvas);
+}
+
+.content {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  animation: fade 0.2s var(--ease);
+}
+
+.splash {
+  height: 100dvh;
+  display: grid;
+  place-items: center;
+}
+.splash svg { animation: pulse 1.2s var(--ease) infinite alternate; }
+
+@keyframes pulse { from { opacity: 0.35; transform: scale(0.94); } }
+@keyframes fade { from { opacity: 0; } }
+
+@media (max-width: 860px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+}

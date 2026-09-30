@@ -1,10 +1,13 @@
+import './global.css'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import FlowBoard from './FlowBoard.tsx'
-import './App.css'
+import { ErrorBoundary } from './components/Shell'
+import { App } from './App'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <FlowBoard />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 )

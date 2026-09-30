@@ -1,133 +1,234 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  DndContext, DragOverlay, KeyboardSensor, MouseSensor, TouchSensor,
-  useSensor, useSensors, type DragStartEvent, type DragEndEvent, type DragOverEvent,
-  pointerWithin, rectIntersection,
+  DndContext, DragOverlay, KeyboardSensor, MeasuringStrategy, MouseSensor, TouchSensor,
+  closestCenter, getFirstCollision, pointerWithin, rectIntersection, useSensor, useSensors,
+  type CollisionDetection, type DragEndEvent, type DragOverEvent, type DragStartEvent, type UniqueIdentifier,
 } from '@dnd-kit/core';
-import { SortableContext, sortableKeyboardCoordinates, horizontalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
+import { SortableContext, arrayMove, horizontalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { useFlowStore } from '../store/useFlowStore';
-import { SortableColumn, DragOverlayContent, Backlog } from '../components/DndComponents';
+import { SortableColumn, ColumnOverlay } from '../components/Column';
+import { CardView } from '../components/Card';
+import { Backlog, BACKLOG_ID } from '../components/Backlog';
+import { InlineInput } from '../components/InlineInput';
+import { Icon, Logo } from '../components/Icon';
+import { cx, matchesQuery } from '../utils';
 import type { Card } from '../types';
+import s from './BoardView.module.css';
+import ui from '../components/ui.module.css';
+
+/** Container id (column id or BACKLOG_ID) → ordered visible card ids. */
+type Items = Record<string, string[]>;
+
+const byOrder = (a: Card, b: Card) => a.order - b.order;
+const findContainer = (items: Items, id: UniqueIdentifier) =>
+  id in items ? String(id) : Object.keys(items).find((k) => items[k].includes(String(id)));
 
 export function BoardView() {
-  const store = useFlowStore();
-  const activeBoardId = store.activeBoardId;
+  const cards = useFlowStore((st) => st.cards);
+  const allColumns = useFlowStore((st) => st.columns);
+  const activeBoardId = useFlowStore((st) => st.activeBoardId);
+  const backlogOpen = useFlowStore((st) => st.backlogOpen);
+  const query = useFlowStore((st) => st.searchQuery).trim().toLowerCase();
+  const { moveCard, reorderColumns, toggleBacklog, openModal } = useFlowStore.getState();
+
   const columns = useMemo(
-    () => store.columns.filter((c) => c.boardId === activeBoardId).sort((a, b) => a.order - b.order),
-    [store.columns, activeBoardId]
+    () => allColumns.filter((c) => c.boardId === activeBoardId).sort((a, b) => a.order - b.order),
+    [allColumns, activeBoardId],
   );
-  const cards = store.cards;
-  const query = store.searchQuery.toLowerCase();
+  const columnIds = useMemo(() => new Set<UniqueIdentifier>(columns.map((c) => c.id)), [columns]);
+  const cardsById = useMemo(() => new Map(cards.map((c) => [c.id, c])), [cards]);
+
+  const baseItems = useMemo(() => {
+    const items: Items = { [BACKLOG_ID]: [] };
+    for (const col of columns) items[col.id] = [];
+    for (const c of cards.filter((c) => c.boardId === activeBoardId && matchesQuery(c, query)).sort(byOrder)) {
+      items[c.columnId ?? BACKLOG_ID]?.push(c.id);
+    }
+    return items;
+  }, [cards, columns, activeBoardId, query]);
+
+  // While a card is dragged we render from a local copy so cross-container moves show live.
+  const [dragItems, setDragItems] = useState<Items | null>(null);
+  const [active, setActive] = useState<{ id: string; type: 'Card' | 'Column' } | null>(null);
+  const items = dragItems ?? baseItems;
+  const lastOverId = useRef<UniqueIdentifier | null>(null);
+  const recentlyMoved = useRef(false);
+
+  useEffect(() => {
+    requestAnimationFrame(() => { recentlyMoved.current = false; });
+  }, [dragItems]);
 
   const sensors = useSensors(
-    useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 300, tolerance: 8 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 8 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+      keyboardCodes: { start: ['Space'], cancel: ['Escape'], end: ['Space', 'Enter'] },
+    }),
   );
 
-  const [activeId, setActiveId] = useState<string | null>(null);
-
-  const collisionDetection = useCallback((args: Parameters<typeof pointerWithin>[0]) => {
-    const pw = pointerWithin(args);
-    if (pw.length > 0) return pw;
-    return rectIntersection(args);
-  }, []);
-
-  const handleDragStart = useCallback((e: DragStartEvent) => { setActiveId(e.active.id as string); }, []);
-
-  const handleDragOver = useCallback((e: DragOverEvent) => {
-    const overId = e.over?.id as string | undefined;
-    if (overId === 'backlog' && !store.backlogOpen) store.toggleBacklog();
-  }, [store]);
-
-  const handleDragEnd = useCallback((e: DragEndEvent) => {
-    const { active, over } = e;
-    setActiveId(null);
-    if (!over) return;
-    const activeType = (active.data.current as { type?: string })?.type;
-    const overId = over.id as string;
-
-    if (activeType === 'Column') {
-      const overType = (over.data.current as { type?: string })?.type;
-      if (overType === 'Column' && active.id !== over.id) {
-        const oldIndex = columns.findIndex((c) => c.id === active.id);
-        const newIndex = columns.findIndex((c) => c.id === overId);
-        store.reorderColumns(arrayMove(columns, oldIndex, newIndex).map((c) => c.id));
-      }
-      return;
+  // Multi-container strategy (from the dnd-kit examples): prefer the card under the pointer,
+  // and when over a container, snap to its closest card so the insertion point is stable.
+  const collisionDetection: CollisionDetection = useCallback((args) => {
+    if (active?.type === 'Column') {
+      return closestCenter({ ...args, droppableContainers: args.droppableContainers.filter((c) => columnIds.has(c.id)) });
     }
-
-    if (activeType === 'Card') {
-      const card = (active.data.current as { card: Card }).card;
-      const overCard = cards.find((c) => c.id === overId);
-      let targetColumnId: string | null = null;
-      let targetIndex = 0;
-
-      if (overCard) {
-        targetColumnId = overCard.columnId;
-        const siblings = cards.filter((c) => c.columnId === targetColumnId && c.id !== card.id).sort((a, b) => a.order - b.order);
-        targetIndex = siblings.findIndex((c) => c.id === overId);
-        if (targetIndex === -1) targetIndex = siblings.length;
-      } else if (overId === 'backlog' || overId === 'backlog-sentinel') {
-        targetColumnId = null;
-        targetIndex = cards.filter((c) => !c.columnId && c.id !== card.id).length;
-      } else {
-        const overCol = columns.find((c) => c.id === overId);
-        if (overCol) { targetColumnId = overCol.id; targetIndex = cards.filter((c) => c.columnId === targetColumnId).length; }
+    // Only keyboard drags (no pointer) use rect intersection. With a pointer in the gap between
+    // columns, intersecting the dragged card's rect flips between both neighbours after every
+    // move and loops forever, so we keep the last target instead.
+    let overId = getFirstCollision(args.pointerCoordinates ? pointerWithin(args) : rectIntersection(args), 'id');
+    if (overId != null) {
+      const inside = overId in items ? items[overId] : null;
+      if (inside?.length) {
+        overId = closestCenter({
+          ...args,
+          droppableContainers: args.droppableContainers.filter((c) => inside.includes(String(c.id))),
+        })[0]?.id ?? overId;
       }
+      lastOverId.current = overId;
+      return [{ id: overId }];
+    }
+    if (recentlyMoved.current) lastOverId.current = args.active.id;
+    return lastOverId.current ? [{ id: lastOverId.current }] : [];
+  }, [active, items, columnIds]);
 
-      if (card.columnId !== targetColumnId || card.order !== targetIndex) {
-        store.moveCard(card.id, targetColumnId, targetIndex);
+  const onDragStart = ({ active: a }: DragStartEvent) => {
+    const type = a.data.current?.type === 'Column' ? 'Column' : 'Card';
+    setActive({ id: String(a.id), type });
+    lastOverId.current = null;
+    if (type === 'Card') setDragItems(baseItems);
+  };
+
+  const onDragOver = ({ active: a, over }: DragOverEvent) => {
+    if (!over || a.data.current?.type === 'Column') return;
+    if (over.id === BACKLOG_ID && !backlogOpen) toggleBacklog();
+    setDragItems((prev) => {
+      if (!prev) return prev;
+      const from = findContainer(prev, a.id);
+      const to = findContainer(prev, over.id);
+      if (!from || !to || from === to) return prev;
+      const target = prev[to];
+      let index = target.length;
+      if (!(over.id in prev)) {
+        const r = a.rect.current.translated;
+        const after = r && (to === BACKLOG_ID
+          ? r.left + r.width / 2 > over.rect.left + over.rect.width / 2
+          : r.top + r.height / 2 > over.rect.top + over.rect.height / 2);
+        const overIndex = target.indexOf(String(over.id));
+        if (overIndex >= 0) index = overIndex + (after ? 1 : 0);
+      }
+      recentlyMoved.current = true;
+      return {
+        ...prev,
+        [from]: prev[from].filter((id) => id !== a.id),
+        [to]: [...target.slice(0, index), String(a.id), ...target.slice(index)],
+      };
+    });
+  };
+
+  const commitCard = (id: string, container: string, list: string[]) => {
+    const card = cardsById.get(id);
+    if (!card) return;
+    const columnId = container === BACKLOG_ID ? null : container;
+    // The visible list may be filtered by search, so anchor on the next visible card to find the real index.
+    const nextId = list[list.indexOf(id) + 1];
+    const siblings = cards.filter((c) => c.boardId === card.boardId && c.columnId === columnId && c.id !== id).sort(byOrder);
+    const found = nextId ? siblings.findIndex((c) => c.id === nextId) : -1;
+    const index = found >= 0 ? found : siblings.length;
+    const currentIndex = card.columnId === columnId
+      ? cards.filter((c) => c.boardId === card.boardId && c.columnId === columnId).sort(byOrder).indexOf(card)
+      : -1;
+    if (index !== currentIndex) moveCard(id, columnId, index);
+  };
+
+  const onDragEnd = ({ active: a, over }: DragEndEvent) => {
+    if (over && a.data.current?.type === 'Column') {
+      const from = columns.findIndex((c) => c.id === a.id);
+      const to = columns.findIndex((c) => c.id === over.id);
+      if (from >= 0 && to >= 0 && from !== to) reorderColumns(arrayMove(columns, from, to).map((c) => c.id));
+    } else if (over && dragItems) {
+      const container = findContainer(dragItems, a.id);
+      if (container) {
+        let list = dragItems[container];
+        const from = list.indexOf(String(a.id));
+        const to = list.indexOf(String(over.id));
+        if (to >= 0 && from !== to) list = arrayMove(list, from, to);
+        commitCard(String(a.id), container, list);
       }
     }
-  }, [columns, cards, store]);
+    setActive(null);
+    setDragItems(null);
+  };
+
+  const onDragCancel = () => { setActive(null); setDragItems(null); };
+
+  const cardsIn = (container: string) => (items[container] ?? []).map((id) => cardsById.get(id)).filter((c): c is Card => !!c);
 
   if (!activeBoardId) {
     return (
-      <div className="flex flex-col h-full overflow-hidden">
-        <div className="flex flex-col items-center justify-center h-full gap-2 p-10">
-          <div className="text-4xl opacity-40">📋</div>
-          <div className="text-[15px] font-semibold text-[var(--text2)] font-[var(--font-display)]">No boards yet</div>
-          <button
-            className="px-3.5 py-2 rounded-[var(--radius)] text-[13px] font-medium cursor-pointer border border-[var(--border2)] bg-transparent text-[var(--text2)] transition-colors duration-150 hover:bg-[var(--bg3)] hover:text-[var(--text)]"
-            onClick={() => store.openModal('addBoard', {})}
-          >
-            Create a board
-          </button>
-        </div>
+      <div className={s.welcome}>
+        <Logo size={52} />
+        <h2>Welcome to FlowBoard</h2>
+        <p>Boards hold columns, and columns hold cards. Create your first board to get started.</p>
+        <button className={cx(ui.btn, ui.primary)} onClick={() => openModal('addBoard', {})}>
+          <Icon name="plus" size={15} /> Create a board
+        </button>
       </div>
     );
   }
 
+  const activeCol = active?.type === 'Column' ? columns.find((c) => c.id === active.id) : undefined;
+  const activeCard = active?.type === 'Card' ? cardsById.get(active.id) : undefined;
+
   return (
-    <DndContext sensors={sensors} collisionDetection={collisionDetection} onDragStart={handleDragStart} onDragOver={handleDragOver} onDragEnd={handleDragEnd}>
-      <div className="flex flex-col h-full overflow-hidden">
-        <SortableContext items={columns.map((c) => c.id)} strategy={horizontalListSortingStrategy}>
-          <div
-            id="columns-area"
-            className="flex gap-3 p-4 overflow-x-auto flex-1 items-start min-h-0 max-sm:p-2 max-sm:gap-2"
-          >
-            {columns.map((col) => {
-              const colCards = cards
-                .filter((c) => c.columnId === col.id)
-                .filter((c) => {
-                  if (!query) return true;
-                  return c.title.toLowerCase().includes(query) || c.desc.toLowerCase().includes(query) || c.tags.some((t) => t.toLowerCase().includes(query));
-                })
-                .sort((a, b) => a.order - b.order);
-              return <SortableColumn key={col.id} col={col} cards={colCards} />;
-            })}
-            <button
-              className="flex-none h-9 px-4 bg-transparent border border-dashed border-[var(--border2)] text-[var(--text3)] rounded-[var(--radius)] cursor-pointer text-[13px] whitespace-nowrap transition-colors duration-150 self-start hover:border-[var(--accent)] hover:text-[var(--accent)]"
-              onClick={() => store.openModal('addColumn', { boardId: activeBoardId })}
-            >
-              + Add Column
-            </button>
-          </div>
-        </SortableContext>
-        <Backlog />
+    <DndContext
+      sensors={sensors}
+      collisionDetection={collisionDetection}
+      measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDragEnd={onDragEnd}
+      onDragCancel={onDragCancel}
+    >
+      <div className={s.board}>
+        <div className={s.columns}>
+          <SortableContext items={columns.map((c) => c.id)} strategy={horizontalListSortingStrategy}>
+            {columns.map((col) => <SortableColumn key={col.id} col={col} cards={cardsIn(col.id)} />)}
+          </SortableContext>
+          <AddColumn boardId={activeBoardId} />
+        </div>
+        <Backlog cards={cardsIn(BACKLOG_ID)} />
       </div>
-      <DragOverlay>{activeId ? <DragOverlayContent id={activeId} /> : null}</DragOverlay>
+      <DragOverlay dropAnimation={{ duration: 180, easing: 'cubic-bezier(0.2, 0, 0, 1)' }}>
+        {activeCol ? <ColumnOverlay col={activeCol} cards={cardsIn(activeCol.id)} />
+          : activeCard ? <CardView card={activeCard} variant="overlay" />
+          : null}
+      </DragOverlay>
     </DndContext>
+  );
+}
+
+function AddColumn({ boardId }: { boardId: string }) {
+  const createColumn = useFlowStore((st) => st.createColumn);
+  const [adding, setAdding] = useState(false);
+  if (!adding) {
+    return (
+      <button className={s.addColumn} onClick={() => setAdding(true)}>
+        <Icon name="plus" size={15} /> Add column
+      </button>
+    );
+  }
+  return (
+    <div className={s.newColumn}>
+      <InlineInput
+        className={ui.input}
+        ariaLabel="New column name"
+        placeholder="Column name…"
+        value=""
+        onCommit={(name) => { createColumn(boardId, name); setAdding(false); }}
+        onCancel={() => setAdding(false)}
+      />
+      <p className={ui.hint}>Enter to create · Esc to cancel</p>
+    </div>
   );
 }

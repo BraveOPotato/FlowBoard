@@ -69,7 +69,7 @@ export class DatabaseService {
     });
   }
 
-  batchPut<T extends Record<string, unknown>>(store: StoreName, items: T[]): Promise<void> {
+  batchPut<T>(store: StoreName, items: T[]): Promise<void> {
     return new Promise((res, rej) => {
       if (!this.db) return rej(new Error('DB not open'));
       const tx = this.db.transaction(store, 'readwrite');

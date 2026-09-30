@@ -68,7 +68,7 @@ export class CryptoService {
         new TextEncoder().encode(JSON.stringify(data))
       );
       const toB64 = (buf: ArrayBuffer) => btoa(String.fromCharCode(...new Uint8Array(buf)));
-      return { enc: 1, iv: toB64(iv), ct: toB64(ct) };
+      return { enc: 1, iv: toB64(iv.buffer), ct: toB64(ct) };
     } catch {
       return data;
     }

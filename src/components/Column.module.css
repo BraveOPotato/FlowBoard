@@ -1,0 +1,151 @@
+.column {
+  flex: 0 0 var(--col-w);
+  width: var(--col-w);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 100%;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 8px 4px;
+  flex-shrink: 0;
+}
+
+.handle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 6px;
+  border-radius: var(--radius);
+  cursor: grab;
+  touch-action: manipulation;
+  outline: none;
+}
+.handle:focus-visible { box-shadow: 0 0 0 2px var(--accent-ring); }
+
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.name {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.renameInput {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 6px;
+  margin-left: -6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent);
+  background: var(--canvas);
+  font-size: 13px;
+  font-weight: 600;
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.action { opacity: 0; transition: opacity 0.15s var(--ease), background 0.15s var(--ease), color 0.15s var(--ease); }
+.column:hover .action, .action:focus-visible, .actionActive { opacity: 1; }
+@media (hover: none) { .action { opacity: 1; } }
+
+/* Scroll container: cards keep their natural height (flex-shrink: 0 on cards) and this area scrolls. */
+.list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 8px 8px;
+}
+
+.empty {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  height: 72px;
+  border-radius: var(--radius);
+  border: 1.5px dashed var(--line);
+  color: var(--fg-subtle);
+  font-size: 12.5px;
+}
+
+.addCard {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  margin: 0 8px 8px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg-subtle);
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+.addCard:hover { background: var(--hover); color: var(--fg); }
+
+.quickAdd { flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; }
+
+.quickInput {
+  width: 100%;
+  min-height: 60px;
+  field-sizing: content;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--accent);
+  background: var(--card);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  font-size: 13.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  resize: none;
+  outline: none;
+}
+.quickInput::placeholder { color: var(--fg-subtle); font-weight: 400; }
+
+.quickActions { display: flex; align-items: center; gap: 6px; }
+.quickHint { margin-left: auto; display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--fg-subtle); }
+
+.menuSwatches { padding: 4px 10px 8px; }
+
+.placeholder {
+  background: var(--accent-soft);
+  border: 1.5px dashed var(--accent-ring);
+}
+.placeholder > * { visibility: hidden; }
+
+.overlay {
+  height: auto;
+  max-height: 80vh;
+  overflow: hidden;
+  cursor: grabbing;
+  transform: rotate(1.5deg);
+  box-shadow: var(--shadow-lg);
+  border-color: var(--line-strong);
+}
+.overlay .handle { cursor: grabbing; }

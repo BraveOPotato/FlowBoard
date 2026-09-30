@@ -2,7 +2,7 @@ import { WORKER_URL } from '../constants';
 import { uid } from '../utils';
 import { CryptoService } from './CryptoService';
 import type { DatabaseService } from './DatabaseService';
-import type { Board, Column, Card, ActivityEvent, BoardCred, CrdtOp, FlowState } from '../types';
+import type { BoardCred, CrdtOp, FlowState } from '../types';
 
 export class SyncService {
   private db: DatabaseService;
@@ -113,7 +113,7 @@ export class SyncService {
     }
   }
 
-  async pushCrdtOps(boardId: string, password: string): Promise<boolean> {
+  async pushCrdtOps(boardId: string): Promise<boolean> {
     const creds = await this.getBoardCreds(boardId);
     if (!creds) return false;
     const allOps = await this.db.getAll<CrdtOp>('crdtOps');
@@ -134,7 +134,7 @@ export class SyncService {
     }
   }
 
-  async pullCrdtOps(boardId: string, password: string, applyCallback: (op: CrdtOp, clientId: string) => boolean): Promise<boolean> {
+  async pullCrdtOps(boardId: string, _password: string, applyCallback: (op: CrdtOp, clientId: string) => boolean): Promise<boolean> {
     const creds = await this.getBoardCreds(boardId);
     if (!creds) return false;
     const metaKey = `crdtMeta:${boardId}`;

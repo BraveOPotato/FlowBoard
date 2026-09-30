@@ -1,0 +1,176 @@
+.wrap { display: flex; flex-direction: column; min-height: 0; }
+
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 12px 0 24px;
+}
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--fg-subtle);
+}
+.crumbs span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crumbCurrent { color: var(--fg-muted); font-weight: 500; }
+
+.layout {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  overflow-y: auto;
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 24px 24px;
+}
+
+.title, .desc {
+  width: 100%;
+  border: none;
+  background: transparent;
+  outline: none;
+  resize: none;
+  field-sizing: content;
+}
+.title::placeholder, .desc::placeholder { color: var(--fg-subtle); }
+
+.title {
+  padding: 0;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+}
+
+.desc {
+  flex: 1;
+  min-height: 220px;
+  margin: 0 -8px;
+  width: calc(100% + 16px);
+  padding: 8px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--fg);
+  transition: background 0.15s var(--ease);
+}
+.desc:hover { background: var(--hover); }
+.desc:focus { background: transparent; box-shadow: inset 0 0 0 1px var(--line-strong); }
+
+.props {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 20px 20px;
+  border-left: 1px solid var(--line);
+  background: color-mix(in srgb, var(--canvas) 35%, var(--raised));
+}
+
+.prop { display: flex; flex-direction: column; gap: 7px; }
+.propLabel { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 500; color: var(--fg-subtle); }
+.propValue { min-width: 0; }
+
+.propValue .control { height: 34px; }
+
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius);
+  background: var(--hover);
+}
+.segment {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.segment:hover { color: var(--fg); }
+.segmentOn { background: var(--raised); color: var(--fg); box-shadow: var(--shadow-sm), 0 0 0 1px var(--line); }
+
+.dateRow { display: flex; align-items: center; gap: 4px; }
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  min-height: 34px;
+  padding: 4px 6px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line-strong);
+  background: var(--canvas);
+  cursor: text;
+  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+.tags:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.tags input {
+  flex: 1;
+  min-width: 70px;
+  height: 22px;
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 13px;
+}
+.tags input::placeholder { color: var(--fg-subtle); }
+
+.chip {
+  composes: tag from '../components/Card.module.css';
+  gap: 2px;
+  padding-right: 2px;
+}
+.chip button {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  opacity: 0.7;
+}
+.chip button:hover { opacity: 1; background: hsl(var(--tag-h) 70% 55% / 0.2); }
+
+.created { margin-top: auto; font-size: 12px; color: var(--fg-subtle); }
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+}
+.footer .deleteBtn { color: var(--fg-subtle); }
+.footer .deleteBtn:hover:not(:disabled) { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.hint { display: flex; gap: 3px; margin-left: auto; margin-right: 6px; }
+
+@media (max-width: 760px) {
+  .layout { grid-template-columns: 1fr; }
+  .props { border-left: none; border-top: 1px solid var(--line); }
+  .desc { min-height: 120px; }
+  .hint { display: none; }
+  .deleteBtn { margin-right: auto; }
+}

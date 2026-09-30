@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import { WORKER_URL, THEMES, COL_COLORS } from '../constants';
-import { uid } from '../utils';
+import { WORKER_URL, COL_COLORS, resolveTheme } from '../constants';
+import { planMove, uid } from '../utils';
 import { DatabaseService } from '../services/DatabaseService';
 import { SyncService } from '../services/SyncService';
 import { CryptoService } from '../services/CryptoService';
@@ -13,13 +13,28 @@ const sync = new SyncService(db, WORKER_URL, (ok) => useFlowStore.setState({ wor
 
 export { db, sync };
 
-export const useFlowStore = create<FlowState>((set, get) => {
-  const applyTheme = (id: string) => {
-    const theme = THEMES.find((t) => t.id === id) || THEMES[0];
-    document.documentElement.setAttribute('data-theme', theme.id);
-    const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
-    if (meta) meta.content = theme.bg;
+const THEME_CACHE_KEY = 'flowboard-theme';
+
+const applyTheme = (id: string | null) => {
+  const theme = resolveTheme(id);
+  const root = document.documentElement;
+  root.dataset.theme = theme.id;
+  root.dataset.scheme = theme.scheme;
+  const vars: Record<string, string> = {
+    canvas: theme.canvas, sidebar: theme.sidebar, surface: theme.surface, card: theme.card, raised: theme.raised,
+    hover: theme.hover, line: theme.line, 'line-strong': theme.lineStrong,
+    fg: theme.fg, 'fg-muted': theme.fgMuted, 'fg-subtle': theme.fgSubtle, accent: theme.accent, 'accent-fg': theme.accentFg,
   };
+  for (const [k, v] of Object.entries(vars)) root.style.setProperty(`--${k}`, v);
+  document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute('content', theme.sidebar);
+  localStorage.setItem(THEME_CACHE_KEY, theme.id);
+  return theme.id;
+};
+
+// Paint the last-used theme before IndexedDB finishes loading, so there's no flash.
+applyTheme(localStorage.getItem(THEME_CACHE_KEY));
+
+export const useFlowStore = create<FlowState>((set, get) => {
 
   const recordActivity = async (boardId: string, cardId: string, type: ActivityEvent['type'], meta: Partial<ActivityEvent> = {}) => {
     const event: ActivityEvent = { id: uid(), boardId, cardId, type, ts: Date.now(), ...meta };
@@ -40,7 +55,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
     activity: [],
     activeBoardId: null,
     activeView: 'board',
-    activeTheme: 'void',
+    activeTheme: 'midnight',
     backlogOpen: true,
     searchQuery: '',
     showDueDateOnly: false,
@@ -67,14 +82,14 @@ export const useFlowStore = create<FlowState>((set, get) => {
         let activeBoardId: string | null = null;
         let workerUrl = WORKER_URL;
         let syncInterval = 600;
-        let activeTheme = 'void';
+        let activeTheme = 'midnight';
         let backlogOpen = true;
 
         for (const s of settings) {
           if (s.key === 'activeBoardId') activeBoardId = s.value as string | null;
           if (s.key === 'workerUrl') workerUrl = (s.value as string) || WORKER_URL;
           if (s.key === 'syncInterval') syncInterval = (s.value as number) || 600;
-          if (s.key === 'activeTheme') activeTheme = (s.value as string) || 'void';
+          if (s.key === 'activeTheme') activeTheme = s.value as string;
           if (s.key === 'backlogOpen') backlogOpen = s.value !== false;
         }
 
@@ -83,7 +98,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
           activeBoardId = sortedBoards[0].id;
         }
 
-        applyTheme(activeTheme);
+        activeTheme = applyTheme(activeTheme);
         sync.setWorkerUrl(workerUrl);
 
         set({
@@ -218,7 +233,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
     },
 
     createCard: async (boardId, columnId, data) => {
-      const colCards = get().cards.filter((c) => c.columnId === columnId);
+      const colCards = get().cards.filter((c) => c.columnId === columnId && c.boardId === boardId);
       const card: Card = {
         id: uid(),
         boardId,
@@ -299,41 +314,9 @@ export const useFlowStore = create<FlowState>((set, get) => {
       const oldColId = card.columnId;
       const isChangeCol = oldColId !== targetColumnId;
 
-      const otherCards = state.cards.filter((c) => c.id !== cardId);
-      const targetSiblings = otherCards
-        .filter((c) => c.columnId === targetColumnId)
-        .sort((a, b) => a.order - b.order);
-
-      const nextTargetCol = [
-        ...targetSiblings.slice(0, targetIndex),
-        { ...card, columnId: targetColumnId, order: targetIndex },
-        ...targetSiblings.slice(targetIndex),
-      ].map((c, i) => ({ ...c, order: i }));
-
-      const nextCardsMap = new Map<string, Card>();
-      for (const c of otherCards) {
-        if (c.columnId !== targetColumnId && c.columnId !== oldColId) {
-          nextCardsMap.set(c.id, c);
-        }
-      }
-      for (const c of nextTargetCol) nextCardsMap.set(c.id, c);
-
-      if (isChangeCol) {
-        const oldSiblings = otherCards
-          .filter((c) => c.columnId === oldColId)
-          .sort((a, b) => a.order - b.order)
-          .map((c, i) => ({ ...c, order: i }));
-        for (const c of oldSiblings) nextCardsMap.set(c.id, c);
-      }
-
-      const nextCards = Array.from(nextCardsMap.values());
-      set({ cards: nextCards });
-
-      const changed = nextCards.filter((c) => {
-        const orig = state.cards.find((x) => x.id === c.id);
-        return orig && (orig.order !== c.order || orig.columnId !== c.columnId);
-      });
-      await db.batchPut('cards', changed);
+      const updates = planMove(state.cards, cardId, targetColumnId, targetIndex);
+      set({ cards: state.cards.map((c) => updates.get(c.id) ?? c) });
+      await db.batchPut('cards', Array.from(updates.values()));
 
       if (isChangeCol) {
         await recordActivity(card.boardId, cardId, 'moved', {
@@ -366,10 +349,9 @@ export const useFlowStore = create<FlowState>((set, get) => {
     },
 
     saveTheme: async (id) => {
-      await db.put('settings', { key: 'activeTheme', value: id });
       applyTheme(id);
       set({ activeTheme: id });
-      get().toast(`Theme: ${THEMES.find((t) => t.id === id)?.label}`, '🎨');
+      await db.put('settings', { key: 'activeTheme', value: id });
     },
 
     saveSettings: async ({ workerUrl, syncInterval }) => {
@@ -384,7 +366,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
           if (changed) set({});
           return changed;
         });
-        await sync.pushCrdtOps(c.boardId, '');
+        await sync.pushCrdtOps(c.boardId);
       }
       sync.startTimer(syncInterval, () => {
         get().saveSettings({ workerUrl, syncInterval }).catch(() => {});
@@ -480,10 +462,10 @@ export const useFlowStore = create<FlowState>((set, get) => {
         }
         case 'column.create':
         case 'column.update': {
-          const [next, c] = upsert(state.columns, payload as Column & { __ts?: number });
+          const [next, c] = upsert(state.columns, payload as unknown as Column & { __ts?: number });
           if (c) {
             set({ columns: next });
-            db.put('columns', payload as Column);
+            db.put('columns', payload);
             changed = true;
           }
           break;
@@ -500,10 +482,10 @@ export const useFlowStore = create<FlowState>((set, get) => {
         case 'card.create':
         case 'card.update':
         case 'card.move': {
-          const [next, c] = upsert(state.cards, payload as Card & { __ts?: number });
+          const [next, c] = upsert(state.cards, payload as unknown as Card & { __ts?: number });
           if (c) {
             set({ cards: next });
-            db.put('cards', payload as Card);
+            db.put('cards', payload);
             changed = true;
           }
           break;
@@ -518,7 +500,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
           break;
         }
         case 'activity.create': {
-          const event = payload as ActivityEvent;
+          const event = payload as unknown as ActivityEvent;
           if (!state.activity.find((a) => a.id === event.id)) {
             set({ activity: [event, ...state.activity] });
             db.put('activity', event);

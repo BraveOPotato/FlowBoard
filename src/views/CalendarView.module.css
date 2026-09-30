@@ -1,0 +1,115 @@
+.calendar {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 20px 20px;
+  min-height: 0;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.month { flex: 1; font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
+.month span { color: var(--fg-subtle); font-weight: 500; }
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+}
+
+.weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  padding-bottom: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-subtle);
+}
+.weekdays div { padding-left: 10px; }
+
+/* 1px gaps over a line-coloured background draw the grid lines. */
+.grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  background: var(--line);
+}
+
+.cell {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  background: var(--canvas);
+  overflow: hidden;
+}
+.outside { background: color-mix(in srgb, var(--surface) 55%, var(--canvas)); }
+.outside .dayNum { color: var(--fg-subtle); opacity: 0.6; }
+.clickable { cursor: pointer; transition: background 0.12s var(--ease); }
+.clickable:hover { background-image: linear-gradient(var(--hover), var(--hover)); }
+
+.dayNum {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.today .dayNum { background: var(--accent); color: var(--accent-fg); font-weight: 600; }
+
+.chips { display: flex; flex-direction: column; gap: 3px; min-height: 0; }
+
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--chip) 14%, transparent);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  min-width: 0;
+}
+.chip:hover { background: color-mix(in srgb, var(--chip) 24%, transparent); }
+.chip i { width: 6px; height: 6px; border-radius: 999px; flex-shrink: 0; background: var(--chip); }
+.chip svg { flex-shrink: 0; color: var(--chip); }
+.chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dueChip { box-shadow: inset 2px 0 0 var(--chip); }
+
+.more { padding-left: 6px; font-size: 11.5px; color: var(--fg-subtle); }
+
+@media (max-width: 640px) {
+  .calendar { padding: 12px; }
+  .toolbar { flex-wrap: wrap; gap: 8px; }
+  .month { flex-basis: 100%; font-size: 18px; }
+  .nav { margin-left: auto; }
+  .weekdays div { padding-left: 0; text-align: center; }
+  .cell { padding: 4px 2px; align-items: center; }
+  .dayNum { width: 22px; height: 22px; font-size: 11px; }
+  .chips { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 3px; }
+  .chip { width: 7px; height: 7px; padding: 0; border-radius: 999px; background: var(--chip); box-shadow: none; }
+  .chip > * { display: none; }
+  .more { display: none; }
+}

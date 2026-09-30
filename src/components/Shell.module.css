@@ -1,0 +1,85 @@
+.toasts {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 9000;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 360px;
+  padding: 10px 14px 10px 10px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line-strong);
+  background: var(--raised);
+  box-shadow: var(--shadow-lg);
+  font-size: 13px;
+  font-weight: 500;
+  animation: toastIn 0.25s var(--ease);
+}
+
+@keyframes toastIn { from { opacity: 0; transform: translateY(8px) scale(0.98); } }
+
+.toastIcon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.success { color: var(--success); background: color-mix(in srgb, var(--success) 15%, transparent); }
+.warning { color: var(--warning); background: color-mix(in srgb, var(--warning) 15%, transparent); }
+.neutral { color: var(--fg-muted); background: var(--hover); }
+
+.fullPage {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px 24px;
+  text-align: center;
+  background: var(--canvas);
+  color: var(--fg);
+}
+.fullPage h1 { font-size: 18px; font-weight: 600; }
+.fullPage code {
+  max-width: 560px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: var(--hover);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.fullPage button {
+  margin-top: 8px;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line-strong);
+  background: var(--raised);
+}
+.fullPageIcon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+@media (max-width: 640px) {
+  .toasts { left: 12px; right: 12px; bottom: 12px; align-items: stretch; }
+  .toast { max-width: none; }
+}

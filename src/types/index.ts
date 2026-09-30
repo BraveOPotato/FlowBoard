@@ -65,12 +65,20 @@ export interface CrdtOp {
 export interface ThemeDef {
   id: string;
   label: string;
-  section: 'dark' | 'light';
-  bg: string;
+  scheme: 'dark' | 'light';
+  canvas: string;
+  sidebar: string;
   surface: string;
+  card: string;
+  raised: string;
+  hover: string;
+  line: string;
+  lineStrong: string;
+  fg: string;
+  fgMuted: string;
+  fgSubtle: string;
   accent: string;
-  accent2: string;
-  dot3: string;
+  accentFg: string;
 }
 
 export interface Toast {
