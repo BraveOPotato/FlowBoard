@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { useFlowStore } from '../store/useFlowStore';
 import { Modal } from './Modal';
+import { Icon } from '../components/Icon';
 import { cx, uid } from '../utils';
 import { CardModal } from './CardModal';
 import { ThemeModal } from './ThemeModal';
@@ -47,16 +48,26 @@ function ConfirmModal({ title, message, confirmLabel = 'Delete', onConfirm }: {
   title: string; message: ReactNode; confirmLabel?: string; onConfirm: () => unknown;
 }) {
   const closeModal = useFlowStore((st) => st.closeModal);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const confirm = async () => {
+    if (busy) return;
+    setBusy(true);
+    const currentModal = useFlowStore.getState().modal;
+    try { await onConfirm(); if (useFlowStore.getState().modal === currentModal) closeModal(); }
+    catch { setError('Couldn’t complete this action. Please try again.'); setBusy(false); }
+  };
   return (
     <Modal
       size="sm"
       title={title}
       footer={<>
-        <button className={cx(ui.btn, ui.secondary)} onClick={closeModal}>Cancel</button>
-        <button className={cx(ui.btn, ui.danger)} autoFocus onClick={() => { closeModal(); onConfirm(); }}>{confirmLabel}</button>
+        <button className={cx(ui.btn, ui.secondary)} autoFocus onClick={closeModal} disabled={busy}>Cancel</button>
+        <button className={cx(ui.btn, ui.danger)} onClick={confirm} disabled={busy}>{busy ? 'Working…' : confirmLabel}</button>
       </>}
     >
       <p className={s.message}>{message}</p>
+      {error && <p className={s.error} role="alert">{error}</p>}
     </Modal>
   );
 }
@@ -69,13 +80,22 @@ export function ModalRouter() {
 
   const content = (() => {
     switch (modal.type) {
-      case 'card': return <CardModal card={p.card as Card | undefined} defaultColId={p.defaultColId as string | undefined} />;
+      case 'card': return <CardModal key={(p.card as Card | undefined)?.id ?? 'new'} card={p.card as Card | undefined} defaultColId={p.defaultColId as string | undefined} />;
       case 'addBoard': return <AddBoardModal />;
       case 'confirm': return <ConfirmModal title={p.title as string} message={p.message as ReactNode} confirmLabel={p.confirmLabel as string} onConfirm={p.onConfirm as () => unknown} />;
       case 'theme': return <ThemeModal />;
       case 'settings': return <SettingsModal />;
       case 'joinInvite': return <SettingsModal inviteId={p.boardId as string} />;
       case 'dayDetail': return <DayDetailModal date={p.date as Date} events={p.events as ActivityEvent[]} dueCards={p.dueCards as Card[]} />;
+      case 'shortcuts': return <Modal title="Keyboard shortcuts" description="A few small shortcuts for a faster flow.">
+        <div className={s.shortcutIntro}><Icon name="help" size={20} /><p>Use shortcuts anywhere outside a text field.</p></div>
+        {[
+          ['Create a card', 'C'], ['Search cards', '/ or Ctrl K'], ['Board / Calendar / Activity', '1 / 2 / 3'],
+          ['Toggle backlog', 'B'], ['Show shortcuts', '?'], ['Close dialog or cancel drag', 'Esc'],
+          ['Save card (in editor)', 'Ctrl Enter'], ['Open focused card', 'Enter'], ['Pick up / drop focused card', 'Space'], ['Move picked-up card', 'Arrow keys'],
+        ].map(([label, key]) => <div className={s.shortcutRow} key={label}><span>{label}</span><kbd className={ui.kbd}>{key}</kbd></div>)}
+        <p className={ui.hint}>On Mac, use ⌘ in place of Ctrl.</p>
+      </Modal>;
       default: return null;
     }
   })();

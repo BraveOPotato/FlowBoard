@@ -2,7 +2,7 @@ import { useMemo, type ReactNode } from 'react';
 import { useFlowStore } from '../store/useFlowStore';
 import { ACTIVITY_META } from '../constants';
 import { Icon } from '../components/Icon';
-import { cx, dayKey, matchesQuery } from '../utils';
+import { cx, dayKey, hasFilters, matchesCard } from '../utils';
 import type { ActivityEvent } from '../types';
 import s from './TimelineView.module.css';
 import ui from '../components/ui.module.css';
@@ -27,6 +27,7 @@ export function TimelineView() {
   const activeBoardId = useFlowStore((st) => st.activeBoardId);
   const dueOnly = useFlowStore((st) => st.showDueDateOnly);
   const query = useFlowStore((st) => st.searchQuery).trim().toLowerCase();
+  const filters = useFlowStore((st) => st.filters);
   const { toggleDueDateOnly, openModal } = useFlowStore.getState();
   const cardsById = useMemo(() => new Map(cards.map((c) => [c.id, c])), [cards]);
 
@@ -35,9 +36,8 @@ export function TimelineView() {
     const evs = activity
       .filter((e) => (!activeBoardId || e.boardId === activeBoardId) && (!dueOnly || e.type === 'due_set'))
       .filter((e) => {
-        if (!query) return true;
         const card = cardsById.get(e.cardId);
-        return card ? matchesQuery(card, query) : (e.cardTitle ?? '').toLowerCase().includes(query);
+        return card ? matchesCard(card, query, filters) : !hasFilters(filters) && (!query || (e.cardTitle ?? '').toLowerCase().includes(query));
       })
       .sort((a, b) => b.ts - a.ts);
     for (const ev of evs) {
@@ -46,7 +46,7 @@ export function TimelineView() {
       if (list) list.push(ev); else map.set(k, [ev]);
     }
     return [...map.entries()];
-  }, [activity, cardsById, activeBoardId, dueOnly, query]);
+  }, [activity, cardsById, activeBoardId, dueOnly, query, filters]);
 
   const now = new Date();
   const todayKey = dayKey(now);
@@ -70,8 +70,9 @@ export function TimelineView() {
         {days.length === 0 ? (
           <div className={s.empty}>
             <span className={s.emptyIcon}><Icon name="activity" size={22} /></span>
-            <h3>{dueOnly ? 'No due date changes yet' : 'No activity yet'}</h3>
-            <p>{dueOnly ? 'Set due dates on cards to see them here.' : 'Create, move or edit cards to build a history.'}</p>
+            <h3>{hasFilters(filters) || query ? 'No matching activity' : dueOnly ? 'No due date changes yet' : 'No activity yet'}</h3>
+            <p>{hasFilters(filters) || query ? 'Try a different search or clear your filters.' : dueOnly ? 'Set due dates on cards to see them here.' : 'Create, move or edit cards to build a history.'}</p>
+            {(hasFilters(filters) || query) && <button className={cx(ui.btn, ui.secondary)} onClick={() => useFlowStore.getState().clearFilters()}>Clear filters</button>}
           </div>
         ) : days.map(([k, evs]) => (
           <section key={k} className={s.day}>

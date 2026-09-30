@@ -46,14 +46,14 @@
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  height: 172px;
-  padding: 2px 20px 14px;
+  height: 194px;
+  padding: 2px 28px 16px;
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior-x: contain;
 }
 
-.item { width: 260px; }
+.item { width: 270px; }
 
 .empty {
   display: grid;
@@ -69,7 +69,8 @@
 }
 
 @media (max-width: 640px) {
-  .track { height: 152px; padding: 2px 12px 12px; }
+  .track { height: 184px; padding: 2px 16px 12px; }
   .item { width: 230px; }
   .header { padding: 0 8px 0 4px; }
 }
+:global([data-density='compact']) .track { height: 138px; }

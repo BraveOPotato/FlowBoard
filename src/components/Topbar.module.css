@@ -21,6 +21,10 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.breadcrumb { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 11px; color: var(--fg-subtle); }
+.breadcrumb > :first-child { flex-shrink: 0; }
+.breadcrumb .title { font-size: 12px; font-weight: 500; color: var(--fg-muted); }
+.search .closeSearch { display: none; }
 
 .views {
   display: flex;
@@ -59,16 +63,15 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 260px;
+  width: 200px;
   height: 34px;
   padding: 0 6px 0 10px;
   border-radius: var(--radius);
   border: 1px solid var(--line);
   background: var(--hover);
-  transition: border-color 0.15s var(--ease), background 0.15s var(--ease), box-shadow 0.15s var(--ease), width 0.2s var(--ease);
+  transition: border-color 0.15s var(--ease), background 0.15s var(--ease), box-shadow 0.15s var(--ease);
 }
 .search:focus-within {
-  width: 320px;
   border-color: var(--accent);
   background: var(--canvas);
   box-shadow: 0 0 0 3px var(--accent-soft);
@@ -89,6 +92,7 @@
 .topbar .searchBtn { display: none; }
 
 @media (max-width: 1100px) {
+  .breadcrumb > :first-child, .breadcrumb > svg { display: none; }
   .viewLabel { display: none; }
   .view { padding: 0 9px; }
   .search, .search:focus-within { width: 220px; }
@@ -102,6 +106,9 @@
 }
 
 @media (max-width: 640px) {
+  .search input { font-size: 16px; }
+  .search .closeSearch { display: inline-grid; }
+  .searchKbd { display: none; }
   .newLabel { display: none; }
   .topbar .newBtn { width: 34px; padding: 0; }
   .topbar .searchBtn { display: inline-grid; }

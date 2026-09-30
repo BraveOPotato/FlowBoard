@@ -8,6 +8,12 @@ A fast, offline-first PWA Kanban board with optional cloud sync via Cloudflare W
 - **Unlimited columns** — drag & drop cards between them
 - **Backlog** — collapsible tray for unassigned cards
 - **Card details** — title, description, tags, due date, priority, color coding
+- **Checklists** — editable tasks and completion progress on every card
+- **Focused work** — combine status, priority, label and due-date filters with search across all three views
+- **Quick actions** — duplicate cards, move without dragging, and undo card deletion
+- **Board overview** — live card counts with one-click shortcuts for due-today and overdue work
+- **Layout preferences** — comfortable or compact cards, saved on this device
+- **Keyboard access** — view navigation, card creation, search and drag/drop; press `?` for the shortcut guide
 - **3 Views** — Board, Calendar (activity + due dates), Timeline (activity log)
 - **Offline-first** — everything stored in IndexedDB, works with no connection
 - **PWA** — installable on desktop and mobile, works offline
@@ -19,15 +25,36 @@ A fast, offline-first PWA Kanban board with optional cloud sync via Cloudflare W
 
 ## Quick Start (Local Only)
 
-No server required. Open `client/index.html` in any modern browser, or serve it locally:
+Use Node.js 22.18+ (or 24+) and npm:
 
 ```bash
-cd client
-npx serve .
-# Visit http://localhost:3000
+npm install
+npm run dev
+# Open the local URL printed by Vite.
 ```
 
 All data is stored in the browser's IndexedDB. Create a board, set a password, and start working.
+
+Production and verification commands:
+
+```bash
+npm run build
+npm run preview
+npm run lint
+npm test
+```
+
+## Everyday workflow
+
+- Use **Filter** to narrow work by status, priority, label, or deadline. Filters combine with search and carry between views; switching boards resets them.
+- Click **Due today** or **Overdue** in the board overview for a deadline-focused view.
+- Open a card to add checklist items, edit them, or mark them complete. Progress appears on the board. **Ctrl/⌘+Enter** saves your changes.
+- Open a card's **⋯** menu to duplicate it or move it to another column. Duplicates start with unchecked, independent checklist items.
+- After deleting a card, click **Undo** in the notification within 10 seconds to restore it. If its column has been deleted, it returns to the backlog.
+- Use the layout buttons next to **Filter** to choose comfortable or compact cards.
+- Press **C** to create a card, **/** to search, **1 / 2 / 3** to switch views, **B** to toggle the backlog, or **?** for all shortcuts. On a focused card, **Enter** opens it; **Space**, arrow keys, then **Space** provide keyboard drag-and-drop.
+
+The React frontend uses native Vite CSS Modules, with shared theme variables in `src/global.css`.
 
 ---
 

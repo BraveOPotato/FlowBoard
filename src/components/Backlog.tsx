@@ -10,7 +10,7 @@ import ui from './ui.module.css';
 
 export const BACKLOG_ID = 'backlog';
 
-export function Backlog({ cards }: { cards: Card[] }) {
+export function Backlog({ cards, totalCount }: { cards: Card[]; totalCount: number }) {
   const open = useFlowStore((st) => st.backlogOpen);
   const { toggleBacklog, openModal } = useFlowStore.getState();
   const { setNodeRef, isOver } = useDroppable({ id: BACKLOG_ID, data: { type: 'Container' } });
@@ -22,19 +22,19 @@ export function Backlog({ cards }: { cards: Card[] }) {
           <Icon name="chevronDown" size={15} className={s.chevron} />
           <Icon name="inbox" size={15} />
           <span className={s.title}>Backlog</span>
-          <span className={ui.count}>{cards.length}</span>
+          <span className={ui.count}>{cards.length === totalCount ? cards.length : `${cards.length}/${totalCount}`}</span>
         </button>
         <button className={cx(ui.btn, ui.ghost, ui.sm)} onClick={() => openModal('card', {})}>
           <Icon name="plus" size={14} /> Add item
         </button>
       </header>
-      <div className={s.body}>
+      <div className={s.body} inert={!open}>
         <div className={s.inner}>
           <div className={s.track}>
             <SortableContext items={cards.map((c) => c.id)} strategy={horizontalListSortingStrategy}>
-              {cards.map((card) => <SortableCard key={card.id} card={card} className={s.item} />)}
+              {cards.map((card) => <SortableCard key={card.id} card={card} className={s.item} compact />)}
             </SortableContext>
-            {cards.length === 0 && <div className={s.empty}>Park ideas and unscheduled work here. Drag cards in or out.</div>}
+            {cards.length === 0 && <div className={s.empty}>{totalCount ? 'No matching backlog cards. Try adjusting your filters.' : 'A little breathing room for ideas. Drag unscheduled work here.'}</div>}
           </div>
         </div>
       </div>

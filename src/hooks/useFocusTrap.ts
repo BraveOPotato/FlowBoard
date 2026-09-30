@@ -12,9 +12,10 @@ export function useFocusTrap<T extends HTMLElement = HTMLDivElement>(active: boo
     if (!el.contains(document.activeElement)) el.focus();
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Tab') return;
-      const focusable = el.querySelectorAll<HTMLElement>(FOCUSABLE);
+      const focusable = [...el.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((node) => node.getClientRects().length && !node.closest('[inert]'));
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
+      if (!first) { e.preventDefault(); return; }
       if (e.shiftKey && (document.activeElement === first || document.activeElement === el)) {
         e.preventDefault();
         last?.focus();

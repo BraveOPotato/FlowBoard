@@ -2,7 +2,7 @@ import { useMemo, type CSSProperties } from 'react';
 import { useFlowStore } from '../store/useFlowStore';
 import { ACTIVITY_META } from '../constants';
 import { Icon } from '../components/Icon';
-import { cx, dayKey, matchesQuery, parseDay } from '../utils';
+import { cx, dayKey, hasFilters, matchesCard, parseDay } from '../utils';
 import type { ActivityEvent, Card } from '../types';
 import s from './CalendarView.module.css';
 import ui from '../components/ui.module.css';
@@ -20,6 +20,7 @@ export function CalendarView() {
   const activeBoardId = useFlowStore((st) => st.activeBoardId);
   const dueOnly = useFlowStore((st) => st.showDueDateOnly);
   const query = useFlowStore((st) => st.searchQuery).trim().toLowerCase();
+  const filters = useFlowStore((st) => st.filters);
   const { setCalendarDate, toggleDueDateOnly, openModal } = useFlowStore.getState();
 
   const year = calendarDate.getFullYear();
@@ -30,7 +31,7 @@ export function CalendarView() {
     const inBoard = (boardId: string) => !activeBoardId || boardId === activeBoardId;
     const byId = new Map(cards.filter((c) => inBoard(c.boardId)).map((c) => [c.id, c]));
     const dueByDay = new Map<string, Card[]>();
-    for (const c of byId.values()) if (c.dueDate && matchesQuery(c, query)) push(dueByDay, dayKey(parseDay(c.dueDate)), c);
+    for (const c of byId.values()) if (c.dueDate && matchesCard(c, query, filters)) push(dueByDay, dayKey(parseDay(c.dueDate)), c);
 
     // One entry per card per day, keeping its most significant event.
     const best = new Map<string, ActivityEvent>();
@@ -38,7 +39,7 @@ export function CalendarView() {
       for (const ev of activity) {
         if (!inBoard(ev.boardId)) continue;
         const card = byId.get(ev.cardId);
-        if (query && !(card ? matchesQuery(card, query) : (ev.cardTitle ?? '').toLowerCase().includes(query))) continue;
+        if (card ? !matchesCard(card, query, filters) : hasFilters(filters) || (query && !(ev.cardTitle ?? '').toLowerCase().includes(query))) continue;
         const k = `${dayKey(ev.ts)}|${ev.cardId}`;
         const prev = best.get(k);
         if (!prev || RANK[ev.type] > RANK[prev.type]) best.set(k, ev);
@@ -47,7 +48,7 @@ export function CalendarView() {
     const eventsByDay = new Map<string, ActivityEvent[]>();
     for (const [k, ev] of best) push(eventsByDay, k.split('|')[0], ev);
     return { byId, dueByDay, eventsByDay };
-  }, [cards, activity, activeBoardId, dueOnly, query]);
+  }, [cards, activity, activeBoardId, dueOnly, query, filters]);
 
   const firstDay = new Date(year, month, 1).getDay();
   const weeks = Math.ceil((firstDay + new Date(year, month + 1, 0).getDate()) / 7);
@@ -111,7 +112,7 @@ export function CalendarView() {
                     <span>{chip.title}</span>
                   </button>
                 ))}
-                {total > MAX_CHIPS && <span className={s.more}>+{total - MAX_CHIPS} more</span>}
+                {total > MAX_CHIPS && <button className={s.more} onClick={(e) => { e.stopPropagation(); openModal('dayDetail', { date, events, dueCards: due }); }}>+{total - MAX_CHIPS} more</button>}
               </div>
             </div>
           );

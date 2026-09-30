@@ -23,7 +23,7 @@ export const COL_COLORS = ['#6c63ff', '#06b6d4', '#22c55e', '#f59e0b', '#ef4444'
 const darkLines = { hover: 'rgba(255,255,255,0.05)', line: 'rgba(255,255,255,0.07)', lineStrong: 'rgba(255,255,255,0.12)' };
 
 export const THEMES: ThemeDef[] = [
-  { id: 'midnight', label: 'Midnight', scheme: 'dark', canvas: '#0c0c10', sidebar: '#09090c', surface: '#131318', card: '#1b1b22', raised: '#1e1e26', ...darkLines, fg: '#ededf1', fgMuted: '#a1a1ad', fgSubtle: '#6b6b78', accent: '#7c74ff', accentFg: '#ffffff' },
+  { id: 'midnight', label: 'Midnight', scheme: 'dark', canvas: '#111315', sidebar: '#0c0e10', surface: '#171a1d', card: '#202428', raised: '#25292d', ...darkLines, fg: '#edf0ef', fgMuted: '#adb7b2', fgSubtle: '#89958f', accent: '#93c5b3', accentFg: '#13271f' },
   { id: 'graphite', label: 'Graphite', scheme: 'dark', canvas: '#111113', sidebar: '#0d0d0f', surface: '#18181b', card: '#1f1f23', raised: '#232327', ...darkLines, fg: '#fafafa', fgMuted: '#a1a1aa', fgSubtle: '#71717a', accent: '#3b82f6', accentFg: '#ffffff' },
   { id: 'tokyo', label: 'Tokyo Night', scheme: 'dark', canvas: '#1a1b26', sidebar: '#16161e', surface: '#1f2030', card: '#24283b', raised: '#292e42', hover: 'rgba(192,202,245,0.06)', line: 'rgba(192,202,245,0.08)', lineStrong: 'rgba(192,202,245,0.14)', fg: '#c0caf5', fgMuted: '#9aa5ce', fgSubtle: '#565f89', accent: '#7aa2f7', accentFg: '#1a1b26' },
   { id: 'mocha', label: 'Catppuccin', scheme: 'dark', canvas: '#1e1e2e', sidebar: '#181825', surface: '#232334', card: '#2c2d40', raised: '#313244', hover: 'rgba(205,214,244,0.06)', line: 'rgba(205,214,244,0.08)', lineStrong: 'rgba(205,214,244,0.14)', fg: '#cdd6f4', fgMuted: '#a6adc8', fgSubtle: '#6c7086', accent: '#cba6f7', accentFg: '#1e1e2e' },

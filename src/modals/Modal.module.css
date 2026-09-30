@@ -59,6 +59,10 @@
 }
 
 .message { color: var(--fg-muted); line-height: 1.55; }
+.error { color: var(--danger); font-size: 12px; margin-top: 12px; }
+
+.shortcutIntro { display: flex; align-items: center; gap: 12px; color: var(--fg-subtle); margin-bottom: 14px; font-size: 12px; }
+.shortcutRow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
 
 /* Settings-style sections */
 .section + .section { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--line); }

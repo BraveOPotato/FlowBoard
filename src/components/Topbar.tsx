@@ -30,6 +30,7 @@ export function Topbar({ onOpenNav }: { onOpenNav: () => void }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
       const st = useFlowStore.getState();
       if (e.key === 'Escape') {
         if (st.modal) st.closeModal();
@@ -41,6 +42,7 @@ export function Topbar({ onOpenNav }: { onOpenNav: () => void }) {
         return;
       }
       if (st.modal) return;
+      if (e.target instanceof HTMLElement && e.target.closest('[role="menu"]')) return;
       const mod = e.ctrlKey || e.metaKey;
       if ((e.key === 'k' && mod) || ((e.key === '/' || e.key === 'f') && !mod && !e.altKey && !isTyping(e.target))) {
         e.preventDefault();
@@ -49,6 +51,10 @@ export function Topbar({ onOpenNav }: { onOpenNav: () => void }) {
         if (!st.activeBoardId) return;
         e.preventDefault();
         st.openModal('card', {});
+      } else if (!mod && !e.altKey && !isTyping(e.target)) {
+        if (e.key === '?') { e.preventDefault(); st.openModal('shortcuts', {}); }
+        if (e.key === 'b' && st.activeView === 'board') { e.preventDefault(); st.toggleBacklog(); }
+        if (['1', '2', '3'].includes(e.key)) { e.preventDefault(); st.setActiveView(VIEWS[Number(e.key) - 1].id); }
       }
     };
     document.addEventListener('keydown', onKey);
@@ -61,16 +67,27 @@ export function Topbar({ onOpenNav }: { onOpenNav: () => void }) {
         <Icon name="menu" size={18} />
       </button>
 
-      <h1 className={s.title}>{board?.name ?? 'FlowBoard'}</h1>
+      <div className={s.breadcrumb}><span>Workspace</span><Icon name="chevronRight" size={12} /><span className={s.title}>{board?.name ?? 'FlowBoard'}</span></div>
 
       <nav className={s.views} role="tablist" aria-label="View">
         {VIEWS.map((v) => (
           <button
             key={v.id}
             role="tab"
+            id={`view-${v.id}`}
+            aria-controls="main-content"
             aria-selected={activeView === v.id}
+            tabIndex={activeView === v.id ? 0 : -1}
             className={cx(s.view, activeView === v.id && s.viewActive)}
             onClick={() => setActiveView(v.id)}
+            onKeyDown={(e) => {
+              if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+              e.preventDefault();
+              const index = VIEWS.findIndex((item) => item.id === v.id);
+              const next = e.key === 'Home' ? 0 : e.key === 'End' ? 2 : (index + (e.key === 'ArrowRight' ? 1 : 2)) % 3;
+              setActiveView(VIEWS[next].id);
+              document.getElementById(`view-${VIEWS[next].id}`)?.focus();
+            }}
             title={v.label}
           >
             <Icon name={v.icon} size={15} />
@@ -85,6 +102,7 @@ export function Topbar({ onOpenNav }: { onOpenNav: () => void }) {
         <Icon name="search" size={15} className={s.searchIcon} />
         <input
           ref={searchRef}
+          id="card-search"
           value={query}
           onChange={(e) => setSearchQuery(e.target.value)}
           onBlur={() => !query && setSearchOpen(false)}
@@ -100,6 +118,7 @@ export function Topbar({ onOpenNav }: { onOpenNav: () => void }) {
         ) : (
           <kbd className={cx(ui.kbd, s.searchKbd)}>/</kbd>
         )}
+        <button className={cx(ui.iconBtn, ui.small, s.closeSearch)} onMouseDown={(e) => e.preventDefault()} onClick={() => { setSearchQuery(''); setSearchOpen(false); searchRef.current?.blur(); }} aria-label="Close search"><Icon name="x" size={14} /></button>
       </div>
       <button className={cx(ui.iconBtn, s.searchBtn)} onClick={focusSearch} aria-label="Search">
         <Icon name="search" size={17} />

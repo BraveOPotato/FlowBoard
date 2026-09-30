@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useFlowStore } from '../store/useFlowStore';
@@ -12,7 +12,7 @@ import type { Card, Column } from '../types';
 import s from './Column.module.css';
 import ui from './ui.module.css';
 
-export function SortableColumn({ col, cards }: { col: Column; cards: Card[] }) {
+export function SortableColumn({ col, cards, totalCount }: { col: Column; cards: Card[]; totalCount: number }) {
   const { openModal, updateColumn, deleteColumn, toast } = useFlowStore.getState();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: col.id,
@@ -24,7 +24,7 @@ export function SortableColumn({ col, cards }: { col: Column; cards: Card[] }) {
 
   const confirmDelete = () => openModal('confirm', {
     title: `Delete “${col.name}”?`,
-    message: cards.length ? `Its ${cards.length} card${cards.length === 1 ? '' : 's'} will move to the backlog.` : 'This column is empty.',
+    message: totalCount ? `Its ${totalCount} card${totalCount === 1 ? '' : 's'} will move to the backlog.` : 'This column is empty.',
     confirmLabel: 'Delete column',
     onConfirm: async () => { await deleteColumn(col.id); toast('Column deleted', '🗑'); },
   });
@@ -32,7 +32,7 @@ export function SortableColumn({ col, cards }: { col: Column; cards: Card[] }) {
   return (
     <section
       ref={setNodeRef}
-      style={{ transform: CSS.Translate.toString(transform), transition }}
+      style={{ transform: CSS.Translate.toString(transform), transition, '--column-color': col.color } as CSSProperties}
       className={cx(s.column, isDragging && s.placeholder)}
       aria-label={col.name}
     >
@@ -50,7 +50,7 @@ export function SortableColumn({ col, cards }: { col: Column; cards: Card[] }) {
           ) : (
             <h3 className={s.name} onDoubleClick={() => setRenaming(true)} title="Double-click to rename">{col.name}</h3>
           )}
-          <span className={ui.count}>{cards.length}</span>
+          <span className={ui.count} title={`${totalCount} cards in this column`}>{cards.length === totalCount ? cards.length : `${cards.length}/${totalCount}`}</span>
         </div>
         <button className={cx(ui.iconBtn, ui.small, s.action)} onClick={() => setAdding(true)} aria-label={`Add card to ${col.name}`} title="Add card">
           <Icon name="plus" size={15} />
@@ -64,7 +64,7 @@ export function SortableColumn({ col, cards }: { col: Column; cards: Card[] }) {
         <SortableContext items={cards.map((c) => c.id)} strategy={verticalListSortingStrategy}>
           {cards.map((card) => <SortableCard key={card.id} card={card} />)}
         </SortableContext>
-        {cards.length === 0 && !adding && <div className={s.empty}>Drop cards here</div>}
+        {cards.length === 0 && !adding && <div className={s.empty}><Icon name={totalCount ? 'filter' : 'plus'} size={18} /><span>{totalCount ? 'No matching cards' : 'Ready for what’s next'}</span><small>{totalCount ? 'Adjust your filters to see more.' : 'Drop a card here or add one below.'}</small></div>}
         {adding && <QuickAdd boardId={col.boardId} columnId={col.id} onDone={() => setAdding(false)} />}
       </div>
 

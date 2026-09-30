@@ -1,7 +1,7 @@
 /// <reference types="node" />
 // Run: node src/utils.check.ts
 import assert from 'node:assert/strict';
-import { formatDue, planMove } from './utils.ts';
+import { DEFAULT_FILTERS, formatDue, hasFilters, matchesCard, planMove } from './utils.ts';
 import type { Card } from './types';
 
 const card = (id: string, boardId: string, columnId: string | null, order: number) =>
@@ -32,5 +32,28 @@ assert.equal(planMove(cards, 'b', null, 0).has('other'), false);
 const d = new Date();
 const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 assert.equal(formatDue(iso)?.state, 'today');
+
+// Filters combine (AND), search is case-insensitive, and checklists are searchable.
+const sample: Card = { ...cards[0], title: 'Review launch', priority: 'high', tags: ['Design'], dueDate: '2026-03-09', checklist: [{ id: 'task', title: 'Check contrast', done: false }] };
+const now = new Date(2026, 2, 9, 23, 45);
+assert.equal(matchesCard(sample, '  CONTRAST  ', { ...DEFAULT_FILTERS, priority: 'high', tag: 'Design', due: 'today', columnId: 'todo' }, now), true);
+assert.equal(matchesCard(sample, '', { ...DEFAULT_FILTERS, priority: 'low', tag: 'Design' }, now), false);
+assert.equal(matchesCard(sample, '', { ...DEFAULT_FILTERS, tag: 'Engineering' }, now), false);
+assert.equal(matchesCard(sample, '', { ...DEFAULT_FILTERS, columnId: 'backlog' }, now), false);
+assert.equal(matchesCard({ ...sample, columnId: null }, '', { ...DEFAULT_FILTERS, columnId: 'backlog' }, now), true);
+assert.equal(matchesCard({ ...sample, dueDate: null }, '', { ...DEFAULT_FILTERS, due: 'none' }, now), true);
+assert.equal(matchesCard({ ...sample, dueDate: null }, '', { ...DEFAULT_FILTERS, due: 'week' }, now), false);
+assert.equal(matchesCard({ ...sample, dueDate: '2026-03-08' }, '', { ...DEFAULT_FILTERS, due: 'overdue' }, now), true);
+assert.equal(matchesCard({ ...sample, dueDate: '2026-03-16' }, '', { ...DEFAULT_FILTERS, due: 'week' }, now), true);
+assert.equal(matchesCard({ ...sample, dueDate: '2026-03-17' }, '', { ...DEFAULT_FILTERS, due: 'week' }, now), false);
+assert.equal(hasFilters(DEFAULT_FILTERS), false);
+assert.equal(hasFilters({ ...DEFAULT_FILTERS, tag: 'Design' }), true);
+
+// Undo insertion preserves the original position and repacks sibling orders after a deletion.
+const removed = cards.filter((c) => c.id !== 'b');
+const restoredUpdates = planMove([...removed, cards[1]], 'b', 'todo', 1);
+const restored = [...removed, cards[1]].map((c) => restoredUpdates.get(c.id) ?? c);
+assert.deepEqual(order(restored, 'b1', 'todo'), ['a', 'b', 'c']);
+assert.equal(restoredUpdates.has('other'), false);
 
 console.log('utils checks passed');

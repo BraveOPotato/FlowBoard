@@ -6,8 +6,9 @@ import { cx } from '../utils';
 import s from './Modal.module.css';
 import ui from '../components/ui.module.css';
 
-export function Modal({ title, description, size = 'md', footer, bare, onSubmit, children }: {
+export function Modal({ title, description, size = 'md', footer, bare, onSubmit, ariaLabel, children }: {
   title?: ReactNode;
+  ariaLabel?: string;
   description?: ReactNode;
   size?: 'sm' | 'md' | 'lg';
   footer?: ReactNode;
@@ -29,7 +30,8 @@ export function Modal({ title, description, size = 'md', footer, bare, onSubmit,
       className={cx(s.dialog, s[size])}
       role="dialog"
       aria-modal="true"
-      aria-labelledby={title ? titleId : undefined}
+        aria-labelledby={title ? titleId : undefined}
+        aria-label={title ? undefined : ariaLabel}
     >
       {title && (
         <header className={s.header}>

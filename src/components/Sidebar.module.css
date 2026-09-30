@@ -5,6 +5,7 @@
   padding: 12px 10px;
   background: var(--sidebar);
   border-right: 1px solid var(--line);
+  outline: none;
 }
 
 .brand {
@@ -13,10 +14,15 @@
   gap: 10px;
   height: 36px;
   padding: 0 6px;
-  margin-bottom: 18px;
+  margin-bottom: 20px;
 }
 .brandName { flex: 1; font-size: 15px; font-weight: 650; letter-spacing: -0.02em; }
 .brand .close { display: none; }
+.workspaceCard { display: flex; align-items: center; gap: 10px; padding: 12px 8px; border-block: 1px solid var(--line); margin: 0 0 20px; }
+.workspaceIcon { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--accent); background: var(--accent-soft); }
+.workspaceCard strong { display: block; font-size: 12px; font-weight: 500; }
+.workspaceCard small { display: block; font-size: 10px; margin-top: 2px; color: var(--fg-subtle); }
+.shortcutKey { margin-left: auto; }
 
 .sectionHead {
   display: flex;
@@ -25,7 +31,7 @@
   height: 28px;
   padding: 0 4px 0 8px;
   margin-bottom: 2px;
-  font-size: 11.5px;
+  font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.02em;
   text-transform: uppercase;
@@ -57,13 +63,13 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 34px;
+  height: 38px;
   padding: 0 8px;
   border: none;
   border-radius: var(--radius);
   background: transparent;
   color: var(--fg-muted);
-  font-size: 13.5px;
+  font-size: 12.5px;
   font-weight: 500;
   text-align: left;
 }
@@ -81,7 +87,7 @@
   font-size: 11px;
   font-weight: 700;
   color: #fff;
-  background: linear-gradient(135deg, hsl(var(--h) 70% 58%), hsl(calc(var(--h) + 40) 70% 48%));
+  background: hsl(var(--h) 25% 38%);
 }
 
 .renameInput {
@@ -127,13 +133,13 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 34px;
+  height: 36px;
   padding: 0 10px;
   border: none;
   border-radius: var(--radius);
   background: transparent;
   color: var(--fg-muted);
-  font-size: 13.5px;
+  font-size: 12px;
   font-weight: 500;
   text-align: left;
 }
@@ -159,10 +165,11 @@
     width: min(300px, 86vw);
     padding-top: max(12px, env(safe-area-inset-top));
     transform: translateX(-100%);
-    transition: transform 0.25s var(--ease);
+    visibility: hidden;
+    transition: transform 0.25s var(--ease), visibility 0.25s;
     box-shadow: var(--shadow-lg);
   }
-  .open { transform: none; }
+  .open { transform: none; visibility: visible; }
   .brand .close { display: inline-grid; }
   .scrim {
     display: block;

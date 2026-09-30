@@ -54,7 +54,7 @@
 
 .desc {
   flex: 1;
-  min-height: 220px;
+  min-height: 140px;
   margin: 0 -8px;
   width: calc(100% + 16px);
   padding: 8px;
@@ -155,6 +155,24 @@
 
 .created { margin-top: auto; font-size: 12px; color: var(--fg-subtle); }
 
+.checklist { margin-top: 12px; padding-top: 16px; border-top: 1px solid var(--line); }
+.checkHead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.checkHead h3 { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 500; }
+.checkHead > span { font-size: 11px; font-family: var(--font-mono); color: var(--fg-subtle); }
+.checklist progress { appearance: none; height: 4px; width: 100%; display: block; margin-bottom: 12px; border: none; border-radius: 3px; overflow: hidden; background: var(--line); color: var(--accent); }
+.checklist progress::-webkit-progress-bar { background: var(--line); }
+.checklist progress::-webkit-progress-value { background: var(--accent); }
+.checklist progress::-moz-progress-bar { background: var(--accent); }
+.task { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.task input[type='checkbox'] { accent-color: var(--accent); width: 15px; height: 15px; flex-shrink: 0; cursor: pointer; }
+.taskTitle { flex: 1; min-width: 0; padding: 5px; border: 1px solid transparent; border-radius: 5px; background: transparent; font-size: 13px; }
+.taskTitle:hover, .taskTitle:focus { background: var(--hover); }
+.taskDone .taskTitle { text-decoration: line-through; color: var(--fg-subtle); }
+.addTask { display: flex; align-items: center; gap: 7px; margin-top: 7px; color: var(--fg-subtle); }
+.addTask input { flex: 1; min-width: 0; border: none; background: transparent; font-size: 12px; padding: 8px 3px; }
+.addTask input::placeholder { color: var(--fg-subtle); }
+.error { padding: 10px 12px; font-size: 12px; color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); border-radius: 6px; }
+
 .footer {
   display: flex;
   align-items: center;
@@ -171,6 +189,7 @@
   .layout { grid-template-columns: 1fr; }
   .props { border-left: none; border-top: 1px solid var(--line); }
   .desc { min-height: 120px; }
+  .desc, .taskTitle, .addTask input, .tags input { font-size: 16px; }
   .hint { display: none; }
   .deleteBtn { margin-right: auto; }
 }

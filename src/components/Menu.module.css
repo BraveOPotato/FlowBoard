@@ -1,4 +1,6 @@
 .menu {
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
   position: fixed;
   z-index: 3000;
   visibility: hidden;

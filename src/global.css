@@ -13,9 +13,9 @@
   --radius-xl: 16px;
 
   --ease: cubic-bezier(0.2, 0, 0, 1);
-  --col-w: 300px;
-  --sidebar-w: 244px;
-  --topbar-h: 56px;
+  --col-w: 304px;
+  --sidebar-w: 232px;
+  --topbar-h: 60px;
 }
 
 [data-scheme='dark'] {
@@ -60,6 +60,8 @@ body {
 
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
+button:active:not(:disabled) { transform: translateY(1px); }
+button:disabled { cursor: default; }
 h1, h2, h3, h4, p { margin: 0; }
 ul { margin: 0; padding: 0; list-style: none; }
 

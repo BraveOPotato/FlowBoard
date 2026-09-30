@@ -98,7 +98,8 @@
 .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dueChip { box-shadow: inset 2px 0 0 var(--chip); }
 
-.more { padding-left: 6px; font-size: 11.5px; color: var(--fg-subtle); }
+.more { padding: 0 6px; border: none; background: transparent; text-align: left; font-size: 11.5px; color: var(--fg-subtle); }
+.more:hover { color: var(--accent); }
 
 @media (max-width: 640px) {
   .calendar { padding: 12px; }

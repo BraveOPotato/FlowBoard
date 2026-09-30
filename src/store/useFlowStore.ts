@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { WORKER_URL, COL_COLORS, resolveTheme } from '../constants';
-import { planMove, uid } from '../utils';
+import { DEFAULT_FILTERS, planMove, uid } from '../utils';
 import { DatabaseService } from '../services/DatabaseService';
 import { SyncService } from '../services/SyncService';
 import { CryptoService } from '../services/CryptoService';
@@ -58,6 +58,8 @@ export const useFlowStore = create<FlowState>((set, get) => {
     activeTheme: 'midnight',
     backlogOpen: true,
     searchQuery: '',
+    filters: { ...DEFAULT_FILTERS },
+    density: 'comfortable',
     showDueDateOnly: false,
     calendarDate: new Date(),
     modal: null,
@@ -84,6 +86,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
         let syncInterval = 600;
         let activeTheme = 'midnight';
         let backlogOpen = true;
+        let density: FlowState['density'] = 'comfortable';
 
         for (const s of settings) {
           if (s.key === 'activeBoardId') activeBoardId = s.value as string | null;
@@ -91,6 +94,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
           if (s.key === 'syncInterval') syncInterval = (s.value as number) || 600;
           if (s.key === 'activeTheme') activeTheme = s.value as string;
           if (s.key === 'backlogOpen') backlogOpen = s.value !== false;
+          if (s.key === 'density' && s.value === 'compact') density = 'compact';
         }
 
         const sortedBoards = boards.sort((a, b) => a.createdAt - b.createdAt);
@@ -111,6 +115,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
           workerUrl,
           syncInterval,
           backlogOpen,
+          density,
           isLoading: false,
         });
 
@@ -128,11 +133,17 @@ export const useFlowStore = create<FlowState>((set, get) => {
 
     setActiveBoard: async (id) => {
       await db.put('settings', { key: 'activeBoardId', value: id });
-      set({ activeBoardId: id });
+      set({ activeBoardId: id, filters: { ...DEFAULT_FILTERS }, searchQuery: '' });
     },
 
     setActiveView: (view: View) => set({ activeView: view }),
     setSearchQuery: (q) => set({ searchQuery: q }),
+    setFilters: (filters) => set((s) => ({ filters: { ...s.filters, ...filters } })),
+    clearFilters: () => set({ filters: { ...DEFAULT_FILTERS }, searchQuery: '' }),
+    setDensity: async (density) => {
+      set({ density });
+      await db.put('settings', { key: 'density', value: density });
+    },
 
     toggleBacklog: async () => {
       const next = !get().backlogOpen;
@@ -145,13 +156,14 @@ export const useFlowStore = create<FlowState>((set, get) => {
     openModal: (type, props) => set({ modal: { type, props } }),
     closeModal: () => set({ modal: null }),
 
-    toast: (message, icon = '✓') => {
+    toast: (message, icon = '✓', action) => {
       const id = uid();
-      set((s) => ({ toasts: [...s.toasts, { id, message, icon }] }));
+      set((s) => ({ toasts: [...s.toasts, { id, message, icon, action }] }));
       setTimeout(() => {
         set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
-      }, 3000);
+      }, action ? 10000 : 4000);
     },
+    dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 
     createBoard: async (name, password) => {
       const boardId = uid();
@@ -159,7 +171,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
       const board: Board = { id: boardId, name: name || 'New Board', createdAt: Date.now() };
       await db.put('boards', board);
       await sync.saveBoardCreds(boardId, keyHash, board.name);
-      set((s) => ({ boards: [...s.boards, board], activeBoardId: boardId }));
+      set((s) => ({ boards: [...s.boards, board], activeBoardId: boardId, filters: { ...DEFAULT_FILTERS }, searchQuery: '' }));
       await db.put('settings', { key: 'activeBoardId', value: boardId });
       await sync.emitOp(boardId, 'board.update', { boardId, ...board });
       const defaultCols = ['To Do', 'In Progress', 'Done'];
@@ -194,7 +206,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
       if (state.activeBoardId === id) {
         await db.put('settings', { key: 'activeBoardId', value: nextActive });
       }
-      set({ boards: nextBoards, columns: nextColumns, cards: nextCards, activeBoardId: nextActive });
+      set({ boards: nextBoards, columns: nextColumns, cards: nextCards, activeBoardId: nextActive, filters: { ...DEFAULT_FILTERS }, searchQuery: '' });
     },
 
     createColumn: async (boardId, name) => {
@@ -223,12 +235,13 @@ export const useFlowStore = create<FlowState>((set, get) => {
     deleteColumn: async (id) => {
       const col = get().columns.find((c) => c.id === id);
       if (!col) return;
-      const nextColumns = get().columns.filter((c) => c.id !== id);
-      const nextCards = get().cards.map((c) => (c.columnId === id ? { ...c, columnId: null } : c));
+      // ponytail: O(n²) column deletion reuses ordering/sync; batch-plan moves if columns reach thousands of cards.
+      for (const card of get().cards.filter((c) => c.columnId === id).sort((a, b) => a.order - b.order)) {
+        const count = get().cards.filter((c) => c.boardId === col.boardId && c.columnId === null).length;
+        await get().moveCard(card.id, null, count);
+      }
       await db.delete('columns', id);
-      const toUpdate = nextCards.filter((c) => c.columnId === null && get().cards.find((x) => x.id === c.id)?.columnId === id);
-      await db.batchPut('cards', toUpdate);
-      set({ columns: nextColumns, cards: nextCards });
+      set((s) => ({ columns: s.columns.filter((c) => c.id !== id), filters: { ...s.filters, columnId: s.filters.columnId === id ? 'all' : s.filters.columnId } }));
       await sync.emitOp(col.boardId, 'column.delete', { id });
     },
 
@@ -244,7 +257,8 @@ export const useFlowStore = create<FlowState>((set, get) => {
         color: data.color || 'transparent',
         priority: (data.priority) || 'medium',
         dueDate: data.dueDate || null,
-        order: colCards.length,
+        checklist: data.checklist ?? [],
+        order: colCards.length ? Math.max(...colCards.map((c) => c.order)) + 1 : 0,
         createdAt: Date.now(),
       };
       await db.put('cards', card);
@@ -262,20 +276,17 @@ export const useFlowStore = create<FlowState>((set, get) => {
       if (!card) return;
       const oldColId = card.columnId;
       const oldDue = card.dueDate;
-      const next = { ...card, ...updates };
+      // Every status change goes through the same ordering path, including edits in the card editor.
+      const { columnId, ...details } = updates;
+      if (columnId !== undefined && columnId !== oldColId) {
+        const count = get().cards.filter((c) => c.boardId === card.boardId && c.columnId === columnId).length;
+        await get().moveCard(id, columnId, count);
+      }
+      const next = { ...get().cards.find((c) => c.id === id)!, ...details };
       await db.put('cards', next);
       set((s) => ({ cards: s.cards.map((c) => (c.id === id ? next : c)) }));
 
-      if ('columnId' in updates && updates.columnId !== oldColId) {
-        await recordActivity(card.boardId, id, 'moved', {
-          cardTitle: next.title,
-          fromColId: oldColId,
-          fromColName: colName(oldColId, get().columns),
-          toColId: next.columnId,
-          toColName: colName(next.columnId, get().columns),
-        });
-        await sync.emitOp(card.boardId, 'card.move', { ...next });
-      } else if ('dueDate' in updates && updates.dueDate !== oldDue) {
+      if ('dueDate' in updates && updates.dueDate !== oldDue) {
         await recordActivity(card.boardId, id, 'due_set', {
           cardTitle: next.title,
           dueDate: next.dueDate,
@@ -295,22 +306,36 @@ export const useFlowStore = create<FlowState>((set, get) => {
 
     deleteCard: async (id) => {
       const card = get().cards.find((c) => c.id === id);
-      if (card) {
-        await recordActivity(card.boardId, id, 'deleted', {
-          cardTitle: card.title,
-          fromColId: card.columnId,
-          fromColName: colName(card.columnId, get().columns),
-        });
-        await sync.emitOp(card.boardId, 'card.delete', { id });
-      }
-      set((s) => ({ cards: s.cards.filter((c) => c.id !== id) }));
+      if (!card) return;
+      const position = get().cards.filter((c) => c.boardId === card.boardId && c.columnId === card.columnId).sort((a, b) => a.order - b.order).findIndex((c) => c.id === id);
       await db.delete('cards', id);
+      set((s) => ({ cards: s.cards.filter((c) => c.id !== id) }));
+      await recordActivity(card.boardId, id, 'deleted', {
+        cardTitle: card.title,
+        fromColId: card.columnId,
+        fromColName: colName(card.columnId, get().columns),
+      });
+      await sync.emitOp(card.boardId, 'card.delete', { id });
+      get().toast('Card deleted', '🗑', { label: 'Undo', run: async () => {
+        const state = get();
+        if (!state.boards.some((b) => b.id === card.boardId)) return;
+        if (state.cards.some((c) => c.id === id)) return;
+        const columnId = state.columns.some((c) => c.id === card.columnId) ? card.columnId : null;
+        const restored = { ...card, columnId };
+        const updates = planMove([...state.cards, restored], id, columnId, position);
+        await db.batchPut('cards', [...updates.values()]);
+        set((s) => ({ cards: [...s.cards.map((c) => updates.get(c.id) ?? c), updates.get(id)!] }));
+        for (const c of updates.values()) await sync.emitOp(c.boardId, c.id === id ? 'card.create' : 'card.update', { ...c });
+        await recordActivity(card.boardId, id, 'created', { cardTitle: card.title, toColId: columnId, toColName: colName(columnId, get().columns) });
+        get().toast('Card restored');
+      } });
     },
 
     moveCard: async (cardId, targetColumnId, targetIndex) => {
       const state = get();
       const card = state.cards.find((c) => c.id === cardId);
       if (!card) return;
+      if (targetColumnId && !state.columns.some((c) => c.id === targetColumnId && c.boardId === card.boardId)) throw new Error('The destination column no longer exists.');
       const oldColId = card.columnId;
       const isChangeCol = oldColId !== targetColumnId;
 
@@ -327,7 +352,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
           toColName: colName(targetColumnId, state.columns),
         });
       }
-      await sync.emitOp(card.boardId, 'card.move', { ...card, columnId: targetColumnId, order: targetIndex });
+      for (const c of updates.values()) await sync.emitOp(c.boardId, c.id === cardId ? 'card.move' : 'card.update', { ...c });
     },
 
     reorderColumns: async (orderedIds) => {

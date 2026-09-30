@@ -11,6 +11,7 @@
 }
 
 .toast {
+  pointer-events: auto;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -24,6 +25,11 @@
   font-weight: 500;
   animation: toastIn 0.25s var(--ease);
 }
+
+.undo { margin-left: auto; background: transparent; color: var(--accent); font-size: 12px; font-weight: 600; border: none; padding: 4px 6px; border-radius: 5px; }
+.undo:hover { background: var(--accent-soft); }
+.dismiss { display: grid; place-items: center; padding: 4px; border: none; background: transparent; color: var(--fg-subtle); border-radius: 4px; }
+.dismiss:hover { background: var(--hover); color: var(--fg); }
 
 @keyframes toastIn { from { opacity: 0; transform: translateY(8px) scale(0.98); } }
 

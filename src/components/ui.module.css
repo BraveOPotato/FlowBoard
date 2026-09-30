@@ -140,3 +140,7 @@ select.input {
 .swatch:hover { transform: scale(1.12); }
 .swatch.selected { box-shadow: 0 0 0 2px var(--raised), 0 0 0 4px var(--fg-muted); }
 .swatch.none { background: transparent; border: 1.5px dashed var(--line-strong); color: var(--fg-subtle); }
+
+@media (max-width: 640px) {
+  .input { font-size: 16px; }
+}

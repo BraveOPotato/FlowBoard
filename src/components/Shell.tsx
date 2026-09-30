@@ -20,6 +20,11 @@ export function ToastContainer() {
           <div key={t.id} className={s.toast}>
             <span className={cx(s.toastIcon, kind.tone)}><Icon name={kind.icon} size={14} strokeWidth={2.2} /></span>
             <span>{t.message}</span>
+            {t.action && <button className={s.undo} onClick={async () => {
+              useFlowStore.getState().dismissToast(t.id);
+              try { await t.action!.run(); } catch { useFlowStore.getState().toast('Couldn’t undo. Please try again.', '⚠', t.action); }
+            }}>{t.action.label}</button>}
+            <button className={s.dismiss} aria-label="Dismiss notification" onClick={() => useFlowStore.getState().dismissToast(t.id)}><Icon name="x" size={13} /></button>
           </div>
         );
       })}

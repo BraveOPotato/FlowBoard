@@ -30,6 +30,14 @@ export interface Card {
   dueDate: string | null;
   order: number;
   createdAt: number;
+  checklist?: { id: string; title: string; done: boolean }[];
+}
+
+export interface CardFilters {
+  priority: Priority | 'all';
+  due: 'all' | 'overdue' | 'today' | 'week' | 'none';
+  tag: string;
+  columnId: string;
 }
 
 export interface ActivityEvent {
@@ -85,6 +93,7 @@ export interface Toast {
   id: ID;
   message: string;
   icon: string;
+  action?: { label: string; run: () => Promise<void> };
 }
 
 export interface ModalState {
@@ -102,6 +111,8 @@ export interface FlowState {
   activeTheme: string;
   backlogOpen: boolean;
   searchQuery: string;
+  filters: CardFilters;
+  density: 'comfortable' | 'compact';
   showDueDateOnly: boolean;
   calendarDate: Date;
   modal: ModalState | null;
@@ -116,12 +127,16 @@ export interface FlowState {
   setActiveBoard: (id: string | null) => Promise<void>;
   setActiveView: (view: View) => void;
   setSearchQuery: (q: string) => void;
+  setFilters: (filters: Partial<CardFilters>) => void;
+  clearFilters: () => void;
+  setDensity: (density: 'comfortable' | 'compact') => Promise<void>;
   toggleBacklog: () => Promise<void>;
   toggleDueDateOnly: () => void;
   setCalendarDate: (d: Date) => void;
   openModal: (type: string, props?: Record<string, unknown>) => void;
   closeModal: () => void;
-  toast: (message: string, icon?: string) => void;
+  toast: (message: string, icon?: string, action?: Toast['action']) => void;
+  dismissToast: (id: string) => void;
   createBoard: (name: string, password: string) => Promise<void>;
   renameBoard: (id: string, name: string) => Promise<void>;
   deleteBoard: (id: string) => Promise<void>;

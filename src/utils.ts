@@ -1,4 +1,4 @@
-import type { Card } from './types';
+import type { Card, CardFilters } from './types';
 
 export function uid(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -10,7 +10,23 @@ export const cx = (...classes: Array<string | false | null | undefined>) => clas
 export const hue = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 360;
 
 export const matchesQuery = (c: Card, q: string) =>
-  !q || c.title.toLowerCase().includes(q) || c.desc.toLowerCase().includes(q) || c.tags.some((t) => t.toLowerCase().includes(q));
+  !q || c.title.toLowerCase().includes(q) || c.desc.toLowerCase().includes(q) || c.tags.some((t) => t.toLowerCase().includes(q)) || !!c.checklist?.some((t) => t.title.toLowerCase().includes(q));
+
+export const DEFAULT_FILTERS: CardFilters = { priority: 'all', due: 'all', tag: '', columnId: 'all' };
+export const hasFilters = (f: CardFilters) => f.priority !== 'all' || f.due !== 'all' || !!f.tag || f.columnId !== 'all';
+
+export function matchesCard(card: Card, query: string, filters: CardFilters, now = new Date()) {
+  if (!matchesQuery(card, query.trim().toLowerCase())) return false;
+  if (filters.priority !== 'all' && card.priority !== filters.priority) return false;
+  if (filters.tag && !card.tags.includes(filters.tag)) return false;
+  if (filters.columnId !== 'all' && (card.columnId ?? 'backlog') !== filters.columnId) return false;
+  if (filters.due === 'all') return true;
+  if (filters.due === 'none') return !card.dueDate;
+  if (!card.dueDate) return false;
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const days = Math.round((parseDay(card.dueDate).getTime() - today.getTime()) / 86400000);
+  return filters.due === 'overdue' ? days < 0 : filters.due === 'today' ? days === 0 : days >= 0 && days <= 7;
+}
 
 /**
  * Moves a card to `targetIndex` within `targetColumnId` (null = backlog) and returns every card

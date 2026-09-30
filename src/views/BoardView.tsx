@@ -11,7 +11,7 @@ import { CardView } from '../components/Card';
 import { Backlog, BACKLOG_ID } from '../components/Backlog';
 import { InlineInput } from '../components/InlineInput';
 import { Icon, Logo } from '../components/Icon';
-import { cx, matchesQuery } from '../utils';
+import { cx, hasFilters, matchesCard } from '../utils';
 import type { Card } from '../types';
 import s from './BoardView.module.css';
 import ui from '../components/ui.module.css';
@@ -29,6 +29,7 @@ export function BoardView() {
   const activeBoardId = useFlowStore((st) => st.activeBoardId);
   const backlogOpen = useFlowStore((st) => st.backlogOpen);
   const query = useFlowStore((st) => st.searchQuery).trim().toLowerCase();
+  const filters = useFlowStore((st) => st.filters);
   const { moveCard, reorderColumns, toggleBacklog, openModal } = useFlowStore.getState();
 
   const columns = useMemo(
@@ -41,11 +42,11 @@ export function BoardView() {
   const baseItems = useMemo(() => {
     const items: Items = { [BACKLOG_ID]: [] };
     for (const col of columns) items[col.id] = [];
-    for (const c of cards.filter((c) => c.boardId === activeBoardId && matchesQuery(c, query)).sort(byOrder)) {
+    for (const c of cards.filter((c) => c.boardId === activeBoardId && matchesCard(c, query, filters)).sort(byOrder)) {
       items[c.columnId ?? BACKLOG_ID]?.push(c.id);
     }
     return items;
-  }, [cards, columns, activeBoardId, query]);
+  }, [cards, columns, activeBoardId, query, filters]);
 
   // While a card is dragged we render from a local copy so cross-container moves show live.
   const [dragItems, setDragItems] = useState<Items | null>(null);
@@ -54,8 +55,9 @@ export function BoardView() {
   const lastOverId = useRef<UniqueIdentifier | null>(null);
   const recentlyMoved = useRef(false);
 
-  useEffect(() => {
-    requestAnimationFrame(() => { recentlyMoved.current = false; });
+    useEffect(() => {
+    const frame = requestAnimationFrame(() => { recentlyMoved.current = false; });
+    return () => cancelAnimationFrame(frame);
   }, [dragItems]);
 
   const sensors = useSensors(
@@ -190,18 +192,19 @@ export function BoardView() {
       onDragEnd={onDragEnd}
       onDragCancel={onDragCancel}
     >
-      <div className={s.board}>
-        <div className={s.columns}>
+        <div className={s.board}>
+          {(hasFilters(filters) || query) && Object.values(baseItems).every((list) => !list.length) && <div className={s.noResults}><Icon name="search" size={16} /><span>No cards match these filters.</span><button className={cx(ui.btn, ui.ghost, ui.sm)} onClick={() => useFlowStore.getState().clearFilters()}>Clear filters</button></div>}
+          <div className={s.columns}>
           <SortableContext items={columns.map((c) => c.id)} strategy={horizontalListSortingStrategy}>
-            {columns.map((col) => <SortableColumn key={col.id} col={col} cards={cardsIn(col.id)} />)}
+              {columns.map((col) => <SortableColumn key={col.id} col={col} cards={cardsIn(col.id)} totalCount={cards.filter((c) => c.boardId === activeBoardId && c.columnId === col.id).length} />)}
           </SortableContext>
           <AddColumn boardId={activeBoardId} />
         </div>
-        <Backlog cards={cardsIn(BACKLOG_ID)} />
+          <Backlog cards={cardsIn(BACKLOG_ID)} totalCount={cards.filter((c) => c.boardId === activeBoardId && c.columnId === null).length} />
       </div>
       <DragOverlay dropAnimation={{ duration: 180, easing: 'cubic-bezier(0.2, 0, 0, 1)' }}>
         {activeCol ? <ColumnOverlay col={activeCol} cards={cardsIn(activeCol.id)} />
-          : activeCard ? <CardView card={activeCard} variant="overlay" />
+            : activeCard ? <CardView card={activeCard} variant="overlay" compact={activeCard.columnId === null} />
           : null}
       </DragOverlay>
     </DndContext>

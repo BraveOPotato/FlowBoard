@@ -4,6 +4,7 @@ import { cx, hue } from '../utils';
 import { Icon, Logo } from './Icon';
 import { Menu, MenuItem, MenuSeparator } from './Menu';
 import { InlineInput } from './InlineInput';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import type { Board } from '../types';
 import s from './Sidebar.module.css';
 import ui from './ui.module.css';
@@ -19,6 +20,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   const { setActiveBoard, openModal, renameBoard, deleteBoard, toast } = useFlowStore.getState();
   const [renaming, setRenaming] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ anchor: HTMLElement; board: Board } | null>(null);
+  const trapRef = useFocusTrap<HTMLElement>(open);
 
   const go = (fn: () => void) => () => { fn(); onClose(); };
 
@@ -36,7 +38,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
 
   return (
     <>
-      <aside className={cx(s.sidebar, open && s.open)} aria-label="Navigation">
+      <aside ref={trapRef} tabIndex={-1} className={cx(s.sidebar, open && s.open)} aria-label="Navigation" role={open ? 'dialog' : undefined} aria-modal={open || undefined} onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }}>
         <div className={s.brand}>
           <Logo />
           <span className={s.brandName}>FlowBoard</span>
@@ -44,6 +46,8 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             <Icon name="x" />
           </button>
         </div>
+
+        <div className={s.workspaceCard}><span className={s.workspaceIcon}><Icon name="board" size={16} /></span><div><strong>My workspace</strong><small>Your space to make progress</small></div></div>
 
         <div className={s.sectionHead}>
           <span>Boards</span>
@@ -101,6 +105,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           <button className={s.navItem} onClick={go(() => openModal('settings', {}))}>
             <Icon name="settings" /> Settings
           </button>
+          <button className={s.navItem} onClick={go(() => openModal('shortcuts', {}))}><Icon name="help" /> Keyboard shortcuts<kbd className={cx(ui.kbd, s.shortcutKey)}>?</kbd></button>
           <button className={s.sync} onClick={go(() => openModal('settings', {}))} title="Cloud sync status">
             <span className={cx(s.syncDot, workerStatus && s.online)} />
             {workerStatus ? 'Cloud sync on' : 'Local only'}

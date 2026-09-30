@@ -7,14 +7,15 @@
   max-height: 100%;
   border-radius: var(--radius-lg);
   border: 1px solid var(--line);
-  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 82%, var(--canvas));
+  border-top: 2px solid color-mix(in srgb, var(--column-color, var(--line)) 55%, var(--surface));
 }
 
 .header {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 8px 8px 4px;
+  padding: 10px 8px 8px;
   flex-shrink: 0;
 }
 
@@ -76,20 +77,26 @@
   overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 4px 8px 8px;
+  gap: 10px;
+  padding: 4px 10px 10px;
 }
 
 .empty {
   flex-shrink: 0;
-  display: grid;
-  place-items: center;
-  height: 72px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 130px;
+  padding: 16px;
   border-radius: var(--radius);
   border: 1.5px dashed var(--line);
   color: var(--fg-subtle);
   font-size: 12.5px;
 }
+.empty small { font-size: 11px; opacity: .75; }
+.empty > svg { opacity: .6; }
 
 .addCard {
   flex-shrink: 0;
@@ -97,7 +104,7 @@
   align-items: center;
   gap: 6px;
   height: 34px;
-  margin: 0 8px 8px;
+  margin: 0 10px 10px;
   padding: 0 8px;
   border: none;
   border-radius: var(--radius);
