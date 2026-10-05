@@ -8,7 +8,6 @@ import ui from './ui.module.css';
 
 export function BoardToolbar() {
   const boardId = useFlowStore((st) => st.activeBoardId);
-  const boards = useFlowStore((st) => st.boards);
   const allCards = useFlowStore((st) => st.cards);
   const allColumns = useFlowStore((st) => st.columns);
   const filters = useFlowStore((st) => st.filters);
@@ -18,7 +17,6 @@ export function BoardToolbar() {
   const [expanded, setExpanded] = useState(false);
   const { setFilters, clearFilters, setDensity } = useFlowStore.getState();
   if (!boardId) return null;
-  const board = boards.find((b) => b.id === boardId);
   const cards = allCards.filter((c) => c.boardId === boardId);
   const columns = allColumns.filter((c) => c.boardId === boardId).sort((a, b) => a.order - b.order);
   const tags = [...new Set(cards.flatMap((c) => c.tags))].sort((a, b) => a.localeCompare(b));
@@ -29,12 +27,8 @@ export function BoardToolbar() {
 
   return (
     <section className={s.workspace} aria-label="Board overview and filters">
-      <div className={s.overview}>
-        <div className={s.intro}>
-          <span className={s.eyebrow}><span /> YOUR WORK, IN FOCUS</span>
-          <h1>{board?.name}</h1>
-          <p>{cards.length ? `${cards.length} cards · ${columns.length} columns · A clear view of what’s next.` : 'A fresh start. Add your first card and make room for good work.'}</p>
-        </div>
+      <div className={s.toolbar}>
+        <div className={s.context}><Icon name={view === 'board' ? 'board' : view === 'calendar' ? 'calendar' : 'activity'} size={16} /><strong>{view === 'board' ? 'Board' : view === 'calendar' ? 'Calendar' : 'Activity'}</strong><span className={s.divider} /><span className={s.result} aria-live="polite">{filtered ? `${count} of ${cards.length} cards` : 'All cards'}</span></div>
         <div className={s.stats} aria-label="Board statistics">
           <button className={s.stat} onClick={clearFilters} aria-label={`Show all ${cards.length} cards`}>
             <span><Icon name="board" size={14} /> Total cards</span><strong>{cards.length}</strong>
@@ -46,9 +40,6 @@ export function BoardToolbar() {
             <span><Icon name="clock" size={14} /> Overdue</span><strong>{countDue('overdue')}</strong>
           </button>
         </div>
-      </div>
-      <div className={s.toolbar}>
-        <div className={s.context}><Icon name={view === 'board' ? 'board' : view === 'calendar' ? 'calendar' : 'activity'} size={16} /><strong>{view === 'board' ? 'Board' : view === 'calendar' ? 'Calendar' : 'Activity'}</strong><span className={s.divider} /><span className={s.result} aria-live="polite">{filtered ? `${count} of ${cards.length} cards` : 'All cards'}</span></div>
         <div className={s.tools}>
           <button className={cx(ui.btn, ui.sm, filtered || expanded ? s.filterActive : ui.ghost)} onClick={() => setExpanded(!expanded)} aria-expanded={expanded} aria-controls="card-filters">
             <Icon name="filter" size={15} /> Filter{hasFilters(filters) && <span className={s.activeDot} />}
