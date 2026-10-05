@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "test": "node src/utils.check.ts",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy": "npm run build && npx wrangler deploy"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
