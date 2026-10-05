@@ -103,7 +103,7 @@ function QuickAdd({ boardId, columnId, onDone }: { boardId: string; columnId: st
   const createCard = useFlowStore((st) => st.createCard);
   const [title, setTitle] = useState('');
   const ref = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => ref.current?.scrollIntoView({ block: 'nearest' }), [title]);
+  useEffect(() => { ref.current?.scrollIntoView({ block: 'nearest' }); }, [title]);
 
   const submit = async () => {
     if (!title.trim()) return onDone();
