@@ -47,8 +47,6 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           </button>
         </div>
 
-        <div className={s.workspaceCard}><span className={s.workspaceIcon}><Icon name="board" size={16} /></span><div><strong>My workspace</strong><small>Your space to make progress</small></div></div>
-
         <div className={s.sectionHead}>
           <span>Boards</span>
           <button className={cx(ui.iconBtn, ui.small)} onClick={go(() => openModal('addBoard', {}))} aria-label="New board" title="New board">
