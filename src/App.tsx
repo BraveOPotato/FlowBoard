@@ -9,6 +9,7 @@ import { ModalRouter } from './modals';
 import { BoardView } from './views/BoardView';
 import { CalendarView } from './views/CalendarView';
 import { TimelineView } from './views/TimelineView';
+import { cx } from './utils';
 import s from './App.module.css';
 
 export function App() {
@@ -18,6 +19,15 @@ export function App() {
   const error = useFlowStore((st) => st.error);
   const density = useFlowStore((st) => st.density);
   const [navOpen, setNavOpen] = useState(false);
+  const [sidebarHidden, setSidebarHidden] = useState(() => {
+    try { return localStorage.getItem('flowboard-sidebar-hidden') === 'true'; }
+    catch { return false; }
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem('flowboard-sidebar-hidden', String(sidebarHidden)); }
+    catch { /* Keep the toggle usable when browser storage is unavailable. */ }
+  }, [sidebarHidden]);
 
   useEffect(() => { useFlowStore.getState().init(); }, []);
 
@@ -32,11 +42,11 @@ export function App() {
   if (error) return <FullPageMessage title="FlowBoard couldn't start" detail={error} />;
 
   return (
-    <div className={s.app} data-density={density}>
+    <div className={cx(s.app, sidebarHidden && s.sidebarHidden)} data-density={density}>
       <a className={s.skip} href="#main-content">Skip to board</a>
-      <Sidebar open={navOpen} onClose={() => setNavOpen(false)} />
+      <Sidebar open={navOpen} hidden={sidebarHidden} onClose={() => setNavOpen(false)} />
       <div className={s.main}>
-        <Topbar onOpenNav={() => setNavOpen(true)} />
+        <Topbar onOpenNav={() => setNavOpen(true)} sidebarHidden={sidebarHidden} onToggleSidebar={() => setSidebarHidden((hidden) => !hidden)} />
         <BoardToolbar />
         <main id="main-content" role="tabpanel" aria-labelledby={`view-${activeView}`} tabIndex={-1} className={s.content}>
           {!activeBoardId || activeView === 'board' ? <BoardView key={activeBoardId} /> : activeView === 'calendar' ? <CalendarView /> : <TimelineView />}

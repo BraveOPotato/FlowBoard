@@ -13,7 +13,7 @@ function Avatar({ board }: { board: Board }) {
   return <span className={s.avatar} style={{ '--h': hue(board.id) } as CSSProperties}>{board.name.trim()[0]?.toUpperCase() || '#'}</span>;
 }
 
-export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function Sidebar({ open, hidden, onClose }: { open: boolean; hidden: boolean; onClose: () => void }) {
   const boards = useFlowStore((st) => st.boards);
   const activeBoardId = useFlowStore((st) => st.activeBoardId);
   const workerStatus = useFlowStore((st) => st.workerStatus);
@@ -38,7 +38,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
 
   return (
     <>
-      <aside ref={trapRef} tabIndex={-1} className={cx(s.sidebar, open && s.open)} aria-label="Navigation" role={open ? 'dialog' : undefined} aria-modal={open || undefined} onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }}>
+      <aside id="workspace-sidebar" ref={trapRef} tabIndex={-1} className={cx(s.sidebar, hidden && s.hidden, open && s.open)} aria-label="Navigation" role={open ? 'dialog' : undefined} aria-modal={open || undefined} onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }}>
         <div className={s.brand}>
           <Logo />
           <span className={s.brandName}>FlowBoard</span>

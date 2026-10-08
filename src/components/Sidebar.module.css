@@ -8,6 +8,8 @@
   outline: none;
 }
 
+.hidden { display: none; }
+
 .brand {
   display: flex;
   align-items: center;
@@ -158,6 +160,7 @@
 .scrim { display: none; }
 
 @media (max-width: 860px) {
+  .sidebar.hidden { display: flex; }
   .sidebar {
     position: fixed;
     inset: 0 auto 0 0;

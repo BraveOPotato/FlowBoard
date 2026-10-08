@@ -15,7 +15,7 @@ const VIEWS: { id: View; label: string; icon: IconName }[] = [
 const isTyping = (el: EventTarget | null) =>
   el instanceof HTMLElement && (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || el.isContentEditable);
 
-export function Topbar({ onOpenNav }: { onOpenNav: () => void }) {
+export function Topbar({ onOpenNav, sidebarHidden, onToggleSidebar }: { onOpenNav: () => void; sidebarHidden: boolean; onToggleSidebar: () => void }) {
   const board = useFlowStore((st) => st.boards.find((b) => b.id === st.activeBoardId));
   const activeView = useFlowStore((st) => st.activeView);
   const query = useFlowStore((st) => st.searchQuery);
@@ -63,6 +63,9 @@ export function Topbar({ onOpenNav }: { onOpenNav: () => void }) {
 
   return (
     <header className={s.topbar}>
+      <button className={cx(ui.iconBtn, s.sidebarBtn)} onClick={onToggleSidebar} aria-label={sidebarHidden ? 'Show sidebar' : 'Hide sidebar'} title={sidebarHidden ? 'Show sidebar' : 'Hide sidebar'} aria-expanded={!sidebarHidden} aria-controls="workspace-sidebar">
+        <Icon name="menu" size={18} />
+      </button>
       <button className={cx(ui.iconBtn, s.navBtn)} onClick={onOpenNav} aria-label="Open navigation">
         <Icon name="menu" size={18} />
       </button>

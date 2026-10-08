@@ -11,6 +11,7 @@
 }
 
 .topbar .navBtn { display: none; margin-left: -6px; }
+.sidebarBtn { margin-left: -6px; }
 
 .title {
   min-width: 0;
@@ -99,6 +100,7 @@
 }
 
 @media (max-width: 860px) {
+  .topbar .sidebarBtn { display: none; }
   .topbar .navBtn { display: inline-grid; }
   .topbar { padding: 0 12px; gap: 8px; }
   .views { margin-left: auto; }
