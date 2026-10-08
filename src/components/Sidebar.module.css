@@ -8,7 +8,23 @@
   outline: none;
 }
 
-.hidden { display: none; }
+@media (min-width: 861px) {
+  .sidebar {
+    width: var(--sidebar-w);
+    min-width: 0;
+    transition: transform 0.25s var(--ease), visibility 0s;
+  }
+  .hidden {
+    transform: translateX(-100%);
+    visibility: hidden;
+    pointer-events: none;
+    transition-delay: 0s, 0.25s;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar { transition-delay: 0s; }
+}
 
 .brand {
   display: flex;
@@ -160,7 +176,6 @@
 .scrim { display: none; }
 
 @media (max-width: 860px) {
-  .sidebar.hidden { display: flex; }
   .sidebar {
     position: fixed;
     inset: 0 auto 0 0;
