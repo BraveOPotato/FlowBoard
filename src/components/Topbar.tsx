@@ -15,7 +15,7 @@ const VIEWS: { id: View; label: string; icon: IconName }[] = [
 const isTyping = (el: EventTarget | null) =>
   el instanceof HTMLElement && (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || el.isContentEditable);
 
-export function Topbar({ onOpenNav, sidebarHidden, onToggleSidebar }: { onOpenNav: () => void; sidebarHidden: boolean; onToggleSidebar: () => void }) {
+export function Topbar({ onOpenNav, sidebarHidden, onToggleSidebar, statsVisible, onToggleStats }: { onOpenNav: () => void; sidebarHidden: boolean; onToggleSidebar: () => void; statsVisible: boolean; onToggleStats: () => void }) {
   const board = useFlowStore((st) => st.boards.find((b) => b.id === st.activeBoardId));
   const activeView = useFlowStore((st) => st.activeView);
   const query = useFlowStore((st) => st.searchQuery);
@@ -100,6 +100,10 @@ export function Topbar({ onOpenNav, sidebarHidden, onToggleSidebar }: { onOpenNa
       </nav>
 
       <div className={s.spacer} />
+
+      <button className={cx(ui.btn, ui.sm, statsVisible ? s.statsActive : ui.ghost)} onClick={onToggleStats} aria-pressed={statsVisible} aria-expanded={statsVisible} aria-controls="board-toolbar" disabled={!board}>
+        Stats
+      </button>
 
       <div className={cx(s.search, (searchOpen || query) && s.searchOpen)}>
         <Icon name="search" size={15} className={s.searchIcon} />

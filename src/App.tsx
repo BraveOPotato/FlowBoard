@@ -19,6 +19,10 @@ export function App() {
   const error = useFlowStore((st) => st.error);
   const density = useFlowStore((st) => st.density);
   const [navOpen, setNavOpen] = useState(false);
+  const [statsVisible, setStatsVisible] = useState(() => {
+    try { return localStorage.getItem('flowboard-stats-hidden') === 'false'; }
+    catch { return false; }
+  });
   const [sidebarHidden, setSidebarHidden] = useState(() => {
     try { return localStorage.getItem('flowboard-sidebar-hidden') === 'true'; }
     catch { return false; }
@@ -28,6 +32,11 @@ export function App() {
     try { localStorage.setItem('flowboard-sidebar-hidden', String(sidebarHidden)); }
     catch { /* Keep the toggle usable when browser storage is unavailable. */ }
   }, [sidebarHidden]);
+
+  useEffect(() => {
+    try { localStorage.setItem('flowboard-stats-hidden', String(!statsVisible)); }
+    catch { /* Keep the toggle usable when browser storage is unavailable. */ }
+  }, [statsVisible]);
 
   useEffect(() => { useFlowStore.getState().init(); }, []);
 
@@ -46,8 +55,8 @@ export function App() {
       <a className={s.skip} href="#main-content">Skip to board</a>
       <Sidebar open={navOpen} hidden={sidebarHidden} onClose={() => setNavOpen(false)} />
       <div className={s.main}>
-        <Topbar onOpenNav={() => setNavOpen(true)} sidebarHidden={sidebarHidden} onToggleSidebar={() => setSidebarHidden((hidden) => !hidden)} />
-        <BoardToolbar />
+        <Topbar onOpenNav={() => setNavOpen(true)} sidebarHidden={sidebarHidden} onToggleSidebar={() => setSidebarHidden((hidden) => !hidden)} statsVisible={statsVisible} onToggleStats={() => setStatsVisible((visible) => !visible)} />
+        <BoardToolbar hidden={!statsVisible} />
         <main id="main-content" role="tabpanel" aria-labelledby={`view-${activeView}`} tabIndex={-1} className={s.content}>
           {!activeBoardId || activeView === 'board' ? <BoardView key={activeBoardId} /> : activeView === 'calendar' ? <CalendarView /> : <TimelineView />}
         </main>

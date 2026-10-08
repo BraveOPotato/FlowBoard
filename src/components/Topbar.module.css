@@ -59,6 +59,7 @@
 }
 
 .spacer { flex: 1; }
+.topbar .statsActive { color: var(--accent); background: var(--accent-soft); }
 
 .search {
   display: flex;

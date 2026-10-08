@@ -6,7 +6,7 @@ import type { CardFilters } from '../types';
 import s from './BoardToolbar.module.css';
 import ui from './ui.module.css';
 
-export function BoardToolbar() {
+export function BoardToolbar({ hidden = false }: { hidden?: boolean }) {
   const boardId = useFlowStore((st) => st.activeBoardId);
   const allCards = useFlowStore((st) => st.cards);
   const allColumns = useFlowStore((st) => st.columns);
@@ -26,7 +26,7 @@ export function BoardToolbar() {
   const focus = (next: Partial<CardFilters>) => { clearFilters(); setFilters(next); setExpanded(true); };
 
   return (
-    <section className={s.workspace} aria-label="Board overview and filters">
+    <section id="board-toolbar" className={s.workspace} aria-label="Board overview and filters" hidden={hidden}>
       <div className={s.toolbar}>
         <div className={s.context}><Icon name={view === 'board' ? 'board' : view === 'calendar' ? 'calendar' : 'activity'} size={16} /><strong>{view === 'board' ? 'Board' : view === 'calendar' ? 'Calendar' : 'Activity'}</strong><span className={s.divider} /><span className={s.result} aria-live="polite">{filtered ? `${count} of ${cards.length} cards` : 'All cards'}</span></div>
         <div className={s.stats} aria-label="Board statistics">
