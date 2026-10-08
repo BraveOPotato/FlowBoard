@@ -126,6 +126,24 @@ export function SettingsModal({ inviteId }: { inviteId?: string }) {
           </div>
         </section>
       )}
+      {!inviteId && (
+        <section className={s.section}>
+          <div className={s.sectionHead}>
+            <div>
+              <h3>Contact us</h3>
+              <p>Have a question, found a bug, or want to suggest a feature?</p>
+            </div>
+          </div>
+          <div className={s.actions}>
+            <a className={cx(ui.btn, ui.secondary)} href="mailto:abdullah@alkhafaji.dev">
+              Contact via email
+            </a>
+            <a className={cx(ui.btn, ui.secondary)} href="https://github.com/BraveOPotato/FlowBoard/issues/new" target="_blank" rel="noopener noreferrer">
+              <Icon name="link" size={15} /> Contact via GitHub
+            </a>
+          </div>
+        </section>
+      )}
     </Modal>
   );
 }
