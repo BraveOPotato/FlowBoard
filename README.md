@@ -1,6 +1,6 @@
 # FlowBoard
 
-A fast, offline-first PWA Kanban board with optional cloud sync via Cloudflare Workers KV.
+A fast, offline-first PWA Kanban board with optional cloud sync via Cloudflare Workers and D1.
 
 ## Features
 
@@ -17,7 +17,7 @@ A fast, offline-first PWA Kanban board with optional cloud sync via Cloudflare W
 - **3 Views** — Board, Calendar (activity + due dates), Timeline (activity log)
 - **Offline-first** — everything stored in IndexedDB, works with no connection
 - **PWA** — installable on desktop and mobile, works offline
-- **Cloud sync** — optional Cloudflare Workers KV backend, 90-day TTL per board
+- **Cloud sync** — optional Cloudflare Workers D1 backend, 90-day idle TTL per board
 - **Invite links** — share a board ID link; recipient enters the password to join
 - **Mobile-friendly** — hamburger menu, responsive layout, touch drag support
 
@@ -42,6 +42,7 @@ npm run build
 npm run preview
 npm run lint
 npm test
+npm run test:sync # real Chromium + IndexedDB; set CHROME_BIN if needed
 ```
 
 ## Everyday workflow
@@ -58,16 +59,28 @@ The React frontend uses native Vite CSS Modules, with shared theme variables in 
 
 ---
 
-## Cloud Sync — Cloudflare Workers KV
+## Cloud Sync — Cloudflare Workers D1
 
-Board data is synced to Cloudflare's edge network using Workers KV. Each board is stored under a key derived from `SHA-256(boardId:password)` — the password never leaves the browser in plain text, and the server never sees it.
+Operations and snapshots are stored in D1, keyed by `SHA-256(boardId:password)`. The password is not sent to the worker. The hash is an access credential: do not publish it.
 
-Boards expire after **90 days of inactivity**. Every read or write resets the TTL.
+**Operation payloads are plaintext on the worker, not end-to-end encrypted.** Encrypted full-state rows from older versions can still be read when joining a board.
+
+Boards expire after **90 days without reads or writes**. Local data is unaffected by cloud expiry. Export a backup before upgrades.
+
+### Upgrading an existing deployment
+
+1. Back up the existing D1 database (Cloudflare D1 export/Time Travel) and export important boards from the app.
+2. Set `database_id` in `worker/wrangler.toml` to the **existing** production D1 ID. Do not replace it with a new empty database. The binding must be `flowboard_db`.
+3. Deploy the worker **before** the frontend. No schema changes are needed for existing D1 deployments.
+4. Deploy the frontend and reload every active client/PWA. Old clients still use the unsafe timestamp cursor; they do not gain the new recovery behavior until updated.
+5. Smoke-test joining, editing from two devices, deletion/Undo, and an offline edit followed by reconnecting. Historical data already lost by the old GC must be restored from a backup; these fixes cannot recreate it.
+
+The worker keeps the legacy endpoints for compatibility. New clients use versioned state reads, including tombstones, so they can recover after operation-log pruning. Snapshots and pruning commit atomically with compare-and-swap protection against concurrent snapshots. Client records, conflict versions and pending operations commit in one IndexedDB transaction.
 
 ### Prerequisites
 
 - A [Cloudflare account](https://dash.cloudflare.com/sign-up) (free tier is sufficient)
-- [Node.js](https://nodejs.org) 18+ installed
+- [Node.js](https://nodejs.org) 22.18+ installed (24+ recommended)
 - Wrangler CLI:
 
 ```bash
@@ -77,32 +90,33 @@ wrangler login
 
 ---
 
-### Step 1 — Create the KV Namespace
+### Step 1 — Create D1 (new installations only)
 
 ```bash
 cd worker
-wrangler kv:namespace create BOARDS
+wrangler d1 create flowboard-db
 ```
 
 Wrangler will print something like:
 
 ```
 Add the following to your configuration file in your kv_namespaces array:
-{ binding = "BOARDS", id = "abc123def456..." }
+  { binding = "flowboard_db", database_name = "flowboard-db", database_id = "..." }
 ```
 
-Copy the `id` value.
+Copy the `database_id` value.
 
 ---
 
 ### Step 2 — Configure wrangler.toml
 
-Open `worker/wrangler.toml` and paste in your KV namespace ID:
+Open `worker/wrangler.toml` and paste in your D1 database ID:
 
 ```toml
-[[kv_namespaces]]
-binding = "BOARDS"
-id = "PASTE_YOUR_ID_HERE"
+[[d1_databases]]
+binding = "flowboard_db"
+database_name = "flowboard-db"
+database_id = "PASTE_YOUR_D1_DATABASE_ID_HERE"
 ```
 
 Also set your worker name if you want a custom subdomain:
@@ -117,6 +131,7 @@ name = "flowboard-worker"
 
 ```bash
 cd worker
+wrangler d1 execute flowboard-db --remote --file migrations/schema.sql
 wrangler deploy
 ```
 
@@ -130,7 +145,7 @@ https://flowboard-worker.YOUR_SUBDOMAIN.workers.dev
 
 ### Step 4 — Point the Client at Your Worker
 
-Open `client/app.js` and update the `WORKER_URL` constant near the top of the file:
+Open `src/constants.ts` and update `WORKER_URL`, or set the Worker URL in the app's Settings:
 
 ```js
 const WORKER_URL = '<WORKER_URL>';
@@ -155,10 +170,10 @@ Redeploy or re-serve the client after saving.
 When you click **+ New Board**, you'll be prompted for:
 
 - **Board name**
-- **Password** — used locally to derive the KV key hash. Cannot be recovered. Store it somewhere safe.
+- **Sync password** — optional, but set one if you plan to share the board. It derives the D1 access key and cannot be recovered. Use a strong, unique password.
 - **Confirm password**
 
-FlowBoard creates the board locally and schedules an immediate push to KV.
+FlowBoard creates the board locally and schedules a debounced operation push to D1.
 
 ---
 
@@ -174,7 +189,7 @@ FlowBoard creates the board locally and schedules an immediate push to KV.
 5. They open the link, FlowBoard opens Settings with the board ID pre-filled
 6. They enter the board password and click **Join Board**
 
-The board is pulled from KV and saved locally. From that point forward, both users sync independently on the configured interval (default: every 10 minutes).
+The board is pulled from D1 and saved locally. Edits trigger a debounced sync; background reads also run at the configured interval (default: every 10 minutes).
 
 ---
 
@@ -191,22 +206,22 @@ The board is pulled from KV and saved locally. From that point forward, both use
 
 | Event | What happens |
 |---|---|
-| Card created / moved / edited | Debounced push to KV after 1.5s |
+| Card created / moved / edited | Debounced operation sync after 1.5s |
 | Periodic timer fires | Pull then push all synced boards |
 | **↻** button clicked | Immediate full sync |
 | App starts with saved boards | Fire-and-forget sync in background |
 
 The sync interval is configurable in Settings (1 min → 1 hour). Default is **10 minutes**.
 
-Sync is last-write-wins at the board level. If two users edit simultaneously between syncs, the last push wins. For most Kanban workflows this is fine — conflicts are rare when people work on different cards.
+Sync is last-write-wins per record (board, column, card or activity event), ordered by operation timestamp with an operation-ID tie-breaker. Concurrent edits to the same card are not field-merged. Deletes retain conflict metadata, and Undo emits a newer operation. Pending local operations survive failed requests and reloads.
 
 ---
 
 ## Security Model
 
 - Passwords never leave the browser in plain text
-- The KV key is `SHA-256(boardId:password)` — a 64-character hex string
-- Without the password, a KV key cannot be reversed to find the board
+- The access key is `SHA-256(boardId:password)`, a 64-character hex string
+- Use HTTPS and strong passwords; weak passwords can be guessed offline if an access hash leaks
 - Board IDs in invite links do not grant access on their own — the password is always required
 - Boards are not listed or discoverable; only someone with both the board ID and password can access one
 
@@ -232,7 +247,7 @@ flowboard/
 │   ├── sw.js            # Service worker — bump VERSION on each release
 │   └── manifest.json    # PWA manifest
 ├── worker/
-│   ├── index.js         # Cloudflare Worker — KV read/write/touch
+│   ├── index.js         # Cloudflare Worker — D1 operations/snapshots/TTL
 │   └── wrangler.toml    # Wrangler deployment config
 └── README.md
 ```
