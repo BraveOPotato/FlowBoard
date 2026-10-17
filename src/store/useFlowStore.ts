@@ -1,9 +1,10 @@
 import { create } from 'zustand';
-import { WORKER_URL, COL_COLORS, resolveTheme } from '../constants';
-import { DEFAULT_FILTERS, planMove, uid } from '../utils';
-import { DatabaseService } from '../services/DatabaseService';
-import { SyncService } from '../services/SyncService';
-import { CryptoService } from '../services/CryptoService';
+import { WORKER_URL, COL_COLORS, resolveTheme } from '../constants.ts';
+import { DEFAULT_FILTERS, planMove, uid } from '../utils.ts';
+import { DatabaseService } from '../services/DatabaseService.ts';
+import { SyncService } from '../services/SyncService.ts';
+import { CryptoService } from '../services/CryptoService.ts';
+import { applyOp, emptyState, materialize, mergeStates, stripMeta, validId, validOp, type CrdtState } from '../services/crdt.ts';
 import type {
   FlowState, Board, Column, Card, ActivityEvent, CrdtOp, View,
 } from '../types';
@@ -36,11 +37,67 @@ applyTheme(localStorage.getItem(THEME_CACHE_KEY));
 
 export const useFlowStore = create<FlowState>((set, get) => {
 
+  let writes = Promise.resolve();
+  let syncWork = Promise.resolve();
+  const persist = (boardId: string, update: (state: CrdtState) => CrdtOp[]) => {
+    const work = writes.then(async () => {
+      const initial = emptyState();
+      const current = get();
+      for (const store of ['boards', 'columns', 'cards', 'activity'] as const) {
+        for (const row of current[store]) {
+          if (store === 'boards' ? row.id === boardId : 'boardId' in row && row.boardId === boardId) {
+            initial[store][row.id] = { __ts: 0, ...row };
+          }
+        }
+      }
+      const state = await db.updateSyncState(boardId, initial, update);
+      const data = materialize(state) as unknown as Pick<FlowState, 'boards' | 'columns' | 'cards' | 'activity'>;
+      const latest = get();
+      set({
+        boards: [...latest.boards.filter(b => b.id !== boardId), ...data.boards].sort((a, b) => a.createdAt - b.createdAt),
+        columns: [...latest.columns.filter(c => c.boardId !== boardId), ...data.columns].sort((a, b) => a.order - b.order),
+        cards: [...latest.cards.filter(c => c.boardId !== boardId), ...data.cards].sort((a, b) => a.order - b.order),
+        activity: [...latest.activity.filter(a => a.boardId !== boardId), ...data.activity].sort((a, b) => b.ts - a.ts),
+      });
+    });
+    writes = work.catch(() => {});
+    return work;
+  };
+  const commit = (boardId: string, changes: { type: string; payload: Record<string, unknown> }[]) => persist(boardId, state => {
+    let after = 0;
+    for (const map of Object.values(state)) for (const row of Object.values(map)) after = Math.max(after, row.__ts ?? 0);
+    return changes.map(({ type, payload }) => {
+      const op = sync.createOp(boardId, type, payload, after);
+      if (!validOp(op, boardId)) throw new Error('Invalid local operation');
+      after = op.ts;
+      applyOp(state, op);
+      return op;
+    });
+  }).then(() => sync.scheduleSync(() => {
+    const { workerUrl, syncInterval } = get();
+    get().saveSettings({ workerUrl, syncInterval }).catch(() => {});
+  }));
+  const mergeRemote = (boardId: string, remote: CrdtState) => persist(boardId, state => { mergeStates(state, remote); return []; });
+
   const recordActivity = async (boardId: string, cardId: string, type: ActivityEvent['type'], meta: Partial<ActivityEvent> = {}) => {
     const event: ActivityEvent = { id: uid(), boardId, cardId, type, ts: Date.now(), ...meta };
-    set((s) => ({ activity: [event, ...s.activity] }));
-    await db.put('activity', event);
-    await sync.emitOp(boardId, 'activity.create', { ...event });
+    await commit(boardId, [{ type: 'activity.create', payload: { ...event } }]);
+  };
+
+  const parseData = (data: unknown, boardId?: string): CrdtState => {
+    if (!data || typeof data !== 'object') throw new Error('Invalid board data');
+    const state = emptyState();
+    for (const store of Object.keys(state) as (keyof CrdtState)[]) {
+      const rows = (data as Record<string, unknown>)[store] ?? [];
+      if (!Array.isArray(rows)) throw new Error('Invalid board records');
+      for (const row of rows) {
+        if (!row || !validId(row.id) || (store !== 'boards' && !validId(row.boardId))
+          || boardId && (store === 'boards' ? row.id !== boardId : row.boardId !== boardId)) throw new Error('Invalid or cross-board record');
+        const fields = stripMeta(row);
+        state[store][row.id] = { ...fields, __ts: 0, __opId: '' };
+      }
+    }
+    return state;
   };
 
   const colName = (colId: string | null, columns: Column[]) => {
@@ -169,30 +226,21 @@ export const useFlowStore = create<FlowState>((set, get) => {
       const boardId = uid();
       const keyHash = await CryptoService.hashKey(boardId, password);
       const board: Board = { id: boardId, name: name || 'New Board', createdAt: Date.now() };
-      await db.put('boards', board);
       await sync.saveBoardCreds(boardId, keyHash, board.name);
-      set((s) => ({ boards: [...s.boards, board], activeBoardId: boardId, filters: { ...DEFAULT_FILTERS }, searchQuery: '' }));
-      await db.put('settings', { key: 'activeBoardId', value: boardId });
-      await sync.emitOp(boardId, 'board.update', { boardId, ...board });
       const defaultCols = ['To Do', 'In Progress', 'Done'];
       const newCols = defaultCols.map((colName, i) => ({
         id: uid(), boardId, name: colName, order: i,
         color: COL_COLORS[i % COL_COLORS.length],
       }));
-      for (const col of newCols) {
-        await db.put('columns', col);
-        await sync.emitOp(boardId, 'column.create', { ...col });
-      }
-      set((s) => ({ columns: [...s.columns, ...newCols] }));
+      await commit(boardId, [{ type: 'board.update', payload: { boardId, ...board } }, ...newCols.map(c => ({ type: 'column.create', payload: { ...c } }))]);
+      await get().setActiveBoard(boardId);
     },
 
     renameBoard: async (id, name) => {
       const board = get().boards.find((b) => b.id === id);
       if (!board) return;
       const next = { ...board, name };
-      await db.put('boards', next);
-      set((s) => ({ boards: s.boards.map((b) => (b.id === id ? next : b)) }));
-      await sync.emitOp(id, 'board.update', { boardId: id, name });
+      await commit(id, [{ type: 'board.update', payload: { ...next, boardId: id } }]);
     },
 
     deleteBoard: async (id) => {
@@ -218,18 +266,14 @@ export const useFlowStore = create<FlowState>((set, get) => {
         order: existing.length,
         color: COL_COLORS[existing.length % COL_COLORS.length],
       };
-      await db.put('columns', col);
-      set((s) => ({ columns: [...s.columns, col] }));
-      await sync.emitOp(boardId, 'column.create', { ...col });
+      await commit(boardId, [{ type: 'column.create', payload: { ...col } }]);
     },
 
     updateColumn: async (id, updates) => {
       const col = get().columns.find((c) => c.id === id);
       if (!col) return;
       const next = { ...col, ...updates };
-      await db.put('columns', next);
-      set((s) => ({ columns: s.columns.map((c) => (c.id === id ? next : c)) }));
-      await sync.emitOp(col.boardId, 'column.update', { ...next });
+      await commit(col.boardId, [{ type: 'column.update', payload: { ...next } }]);
     },
 
     deleteColumn: async (id) => {
@@ -240,9 +284,8 @@ export const useFlowStore = create<FlowState>((set, get) => {
         const count = get().cards.filter((c) => c.boardId === col.boardId && c.columnId === null).length;
         await get().moveCard(card.id, null, count);
       }
-      await db.delete('columns', id);
-      set((s) => ({ columns: s.columns.filter((c) => c.id !== id), filters: { ...s.filters, columnId: s.filters.columnId === id ? 'all' : s.filters.columnId } }));
-      await sync.emitOp(col.boardId, 'column.delete', { id });
+      await commit(col.boardId, [{ type: 'column.delete', payload: { id, boardId: col.boardId } }]);
+      set(s => ({ filters: { ...s.filters, columnId: s.filters.columnId === id ? 'all' : s.filters.columnId } }));
     },
 
     createCard: async (boardId, columnId, data) => {
@@ -261,14 +304,12 @@ export const useFlowStore = create<FlowState>((set, get) => {
         order: colCards.length ? Math.max(...colCards.map((c) => c.order)) + 1 : 0,
         createdAt: Date.now(),
       };
-      await db.put('cards', card);
-      set((s) => ({ cards: [...s.cards, card] }));
+      await commit(boardId, [{ type: 'card.create', payload: { ...card } }]);
       await recordActivity(boardId, card.id, 'created', {
         cardTitle: card.title,
         toColId: columnId,
         toColName: colName(columnId, get().columns),
       });
-      await sync.emitOp(boardId, 'card.create', { ...card });
     },
 
     updateCard: async (id, updates) => {
@@ -283,8 +324,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
         await get().moveCard(id, columnId, count);
       }
       const next = { ...get().cards.find((c) => c.id === id)!, ...details };
-      await db.put('cards', next);
-      set((s) => ({ cards: s.cards.map((c) => (c.id === id ? next : c)) }));
+      await commit(card.boardId, [{ type: 'card.update', payload: { ...next } }]);
 
       if ('dueDate' in updates && updates.dueDate !== oldDue) {
         await recordActivity(card.boardId, id, 'due_set', {
@@ -293,14 +333,12 @@ export const useFlowStore = create<FlowState>((set, get) => {
           toColId: next.columnId,
           toColName: colName(next.columnId, get().columns),
         });
-        await sync.emitOp(card.boardId, 'card.update', { ...next });
       } else {
         await recordActivity(card.boardId, id, 'updated', {
           cardTitle: next.title,
           toColId: next.columnId,
           toColName: colName(next.columnId, get().columns),
         });
-        await sync.emitOp(card.boardId, 'card.update', { ...next });
       }
     },
 
@@ -308,14 +346,12 @@ export const useFlowStore = create<FlowState>((set, get) => {
       const card = get().cards.find((c) => c.id === id);
       if (!card) return;
       const position = get().cards.filter((c) => c.boardId === card.boardId && c.columnId === card.columnId).sort((a, b) => a.order - b.order).findIndex((c) => c.id === id);
-      await db.delete('cards', id);
-      set((s) => ({ cards: s.cards.filter((c) => c.id !== id) }));
+      await commit(card.boardId, [{ type: 'card.delete', payload: { id, boardId: card.boardId } }]);
       await recordActivity(card.boardId, id, 'deleted', {
         cardTitle: card.title,
         fromColId: card.columnId,
         fromColName: colName(card.columnId, get().columns),
       });
-      await sync.emitOp(card.boardId, 'card.delete', { id });
       get().toast('Card deleted', '🗑', { label: 'Undo', run: async () => {
         const state = get();
         if (!state.boards.some((b) => b.id === card.boardId)) return;
@@ -323,9 +359,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
         const columnId = state.columns.some((c) => c.id === card.columnId) ? card.columnId : null;
         const restored = { ...card, columnId };
         const updates = planMove([...state.cards, restored], id, columnId, position);
-        await db.batchPut('cards', [...updates.values()]);
-        set((s) => ({ cards: [...s.cards.map((c) => updates.get(c.id) ?? c), updates.get(id)!] }));
-        for (const c of updates.values()) await sync.emitOp(c.boardId, c.id === id ? 'card.create' : 'card.update', { ...c });
+        await commit(card.boardId, [...updates.values()].map(c => ({ type: c.id === id ? 'card.create' : 'card.update', payload: { ...c } })));
         await recordActivity(card.boardId, id, 'created', { cardTitle: card.title, toColId: columnId, toColName: colName(columnId, get().columns) });
         get().toast('Card restored');
       } });
@@ -340,8 +374,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
       const isChangeCol = oldColId !== targetColumnId;
 
       const updates = planMove(state.cards, cardId, targetColumnId, targetIndex);
-      set({ cards: state.cards.map((c) => updates.get(c.id) ?? c) });
-      await db.batchPut('cards', Array.from(updates.values()));
+      await commit(card.boardId, [...updates.values()].map(c => ({ type: c.id === cardId ? 'card.move' : 'card.update', payload: { ...c } })));
 
       if (isChangeCol) {
         await recordActivity(card.boardId, cardId, 'moved', {
@@ -352,7 +385,6 @@ export const useFlowStore = create<FlowState>((set, get) => {
           toColName: colName(targetColumnId, state.columns),
         });
       }
-      for (const c of updates.values()) await sync.emitOp(c.boardId, c.id === cardId ? 'card.move' : 'card.update', { ...c });
     },
 
     reorderColumns: async (orderedIds) => {
@@ -362,14 +394,12 @@ export const useFlowStore = create<FlowState>((set, get) => {
         if (idx === -1) return c;
         return { ...c, order: idx };
       });
-      set({ columns: nextColumns });
       const changed = nextColumns.filter((c) => {
         const orig = state.columns.find((x) => x.id === c.id);
         return orig && orig.order !== c.order;
       });
-      await db.batchPut('columns', changed);
-      for (const c of changed) {
-        await sync.emitOp(c.boardId, 'column.update', { ...c });
+      for (const boardId of new Set(changed.map(c => c.boardId))) {
+        await commit(boardId, changed.filter(c => c.boardId === boardId).map(c => ({ type: 'column.update', payload: { ...c } })));
       }
     },
 
@@ -379,48 +409,59 @@ export const useFlowStore = create<FlowState>((set, get) => {
       await db.put('settings', { key: 'activeTheme', value: id });
     },
 
-    saveSettings: async ({ workerUrl, syncInterval }) => {
-      await db.put('settings', { key: 'workerUrl', value: workerUrl });
-      await db.put('settings', { key: 'syncInterval', value: syncInterval });
-      sync.setWorkerUrl(workerUrl);
+    saveSettings: ({ workerUrl, syncInterval }) => {
+      // Debounced edits must use the latest requested endpoint, not queue an obsolete setting.
       sync.stopTimer();
-      const creds = await sync.getAllBoardCreds();
-      for (const c of creds) {
-        await sync.pullCrdtOps(c.boardId, '', (op, cid) => {
-          const changed = get().applyCrdtOp(op, cid);
-          if (changed) set({});
-          return changed;
-        });
-        await sync.pushCrdtOps(c.boardId);
-      }
-      sync.startTimer(syncInterval, () => {
-        get().saveSettings({ workerUrl, syncInterval }).catch(() => {});
-      });
       set({ workerUrl, syncInterval });
+      const run = syncWork.catch(() => {}).then(async () => {
+        if (get().workerUrl !== workerUrl || get().syncInterval !== syncInterval) return;
+        await db.put('settings', { key: 'workerUrl', value: workerUrl });
+        await db.put('settings', { key: 'syncInterval', value: syncInterval });
+        sync.setWorkerUrl(workerUrl);
+        sync.stopTimer();
+        const creds = await sync.getAllBoardCreds();
+        for (const c of creds) {
+          await sync.pullCrdtState(c.boardId, state => get().boards.some(b => b.id === c.boardId) ? mergeRemote(c.boardId, state) : Promise.resolve());
+          await sync.pushCrdtOps(c.boardId);
+        }
+        sync.startTimer(syncInterval, () => {
+          get().saveSettings({ workerUrl, syncInterval }).catch(() => {});
+        });
+      });
+      syncWork = run;
+      return run;
     },
 
     joinBoard: async (boardId, password) => {
       const keyHash = await CryptoService.hashKey(boardId, password);
-      await sync.saveBoardCreds(boardId, keyHash, 'Remote Board');
-      const ok = await sync.pullFromWorker(boardId, password, (data) => {
-        const d = data as { boards?: Board[]; columns?: Column[]; cards?: Card[]; activity?: ActivityEvent[] };
-        const state = get();
-        const merge = <T extends { id: string }>(list: T[], incoming: T[] = []) => {
-          const map = new Map(list.map((x) => [x.id, x]));
-          for (const item of incoming) map.set(item.id, item);
-          return Array.from(map.values());
-        };
-        set({
-          boards: merge(state.boards, d.boards).sort((a, b) => (a as Board).createdAt - (b as Board).createdAt),
-          columns: merge(state.columns, d.columns).sort((a, b) => (a as Column).order - (b as Column).order),
-          cards: merge(state.cards, d.cards).sort((a, b) => (a as Card).order - (b as Card).order),
-          activity: merge(state.activity, d.activity).sort((a, b) => (b as ActivityEvent).ts - (a as ActivityEvent).ts),
+      const ok = await sync.pullFromWorker(boardId, password, async (data, remote) => {
+        const baseline = parseData(data, boardId);
+        await persist(boardId, state => {
+          mergeStates(state, baseline);
+          if (remote) mergeStates(state, remote);
+          // Carry legacy-only records into the operation log without giving stale data a new clock.
+          const seeds: CrdtOp[] = [];
+          for (const [store, type] of [['boards', 'board.update'], ['columns', 'column.create'], ['cards', 'card.create'], ['activity', 'activity.create']] as const) {
+            for (const row of Object.values(baseline[store])) {
+              if (remote?.[store][row.id] || state[store][row.id]?.__ts) continue;
+              const seed = { boardId, opId: uid(), clientId: '', ts: 0, type, payload: { ...stripMeta(row), boardId } };
+              applyOp(state, seed);
+              seeds.push(seed);
+            }
+          }
+          return seeds;
         });
-      });
-      if (ok && !get().boards.find((b) => b.id === boardId)) {
-        get().toast('Board joined!', '✓');
+      }, keyHash);
+      if (!ok) return false;
+      // Boards whose server history lost the board record still need a sidebar entry.
+      if (!get().boards.some((b) => b.id === boardId)) {
+        await commit(boardId, [{ type: 'board.update', payload: { id: boardId, boardId, name: 'Shared board', createdAt: Date.now() } }]);
       }
-      return ok;
+      await sync.saveBoardCreds(boardId, keyHash, get().boards.find(b => b.id === boardId)!.name);
+      await get().setActiveBoard(boardId);
+      const { workerUrl, syncInterval } = get();
+      get().saveSettings({ workerUrl, syncInterval }).catch(() => {});
+      return true;
     },
 
     exportData: () => {
@@ -434,107 +475,18 @@ export const useFlowStore = create<FlowState>((set, get) => {
     },
 
     importData: async (json) => {
-      const data = JSON.parse(json) as { boards?: Board[]; columns?: Column[]; cards?: Card[]; activity?: ActivityEvent[] };
-      const state = get();
-      const merge = <T extends { id: string }>(list: T[], incoming: T[] = []) => {
-        const map = new Map(list.map((x) => [x.id, x]));
-        for (const item of incoming) map.set(item.id, item);
-        return Array.from(map.values());
-      };
-      const nextBoards = merge(state.boards, data.boards);
-      const nextColumns = merge(state.columns, data.columns);
-      const nextCards = merge(state.cards, data.cards);
-      const nextActivity = merge(state.activity, data.activity).sort((a, b) => (b as ActivityEvent).ts - (a as ActivityEvent).ts);
-      set({ boards: nextBoards, columns: nextColumns, cards: nextCards, activity: nextActivity });
-      for (const b of data.boards || []) await db.put('boards', b);
-      for (const c of data.columns || []) await db.put('columns', c);
-      for (const c of data.cards || []) await db.put('cards', c);
-      for (const a of data.activity || []) await db.put('activity', a);
-      get().toast('Data imported', '✓');
-    },
-
-    applyCrdtOp: (op: CrdtOp, clientId: string) => {
-      if (clientId && op.clientId === clientId) return false;
-      const { type, ts, payload } = op;
-      const state = get();
-
-      const upsert = <T extends { id: string }>(list: T[], incoming: T & { __ts?: number }): [T[], boolean] => {
-        const idx = list.findIndex((x) => x.id === incoming.id);
-        if (idx >= 0) {
-          const existing = list[idx] as T & { __ts?: number };
-          if (ts >= (existing.__ts || 0)) {
-            const next = { ...incoming, __ts: ts };
-            const nextList = list.slice();
-            nextList[idx] = next as T;
-            return [nextList, true];
-          }
-          return [list, false];
-        }
-        return [[...list, { ...incoming, __ts: ts } as T], true];
-      };
-
-      let changed = false;
-      switch (type) {
-        case 'board.update': {
-          const { boardId, ...rest } = payload as { boardId: string } & Record<string, unknown>;
-          const [next, c] = upsert(state.boards, { id: boardId, ...rest } as Board & { __ts?: number });
-          if (c) {
-            set({ boards: next });
-            db.put('boards', next.find((b) => b.id === boardId)!);
-            changed = true;
-          }
-          break;
-        }
-        case 'column.create':
-        case 'column.update': {
-          const [next, c] = upsert(state.columns, payload as unknown as Column & { __ts?: number });
-          if (c) {
-            set({ columns: next });
-            db.put('columns', payload);
-            changed = true;
-          }
-          break;
-        }
-        case 'column.delete': {
-          const { id } = payload as { id: string };
-          if (state.columns.find((x) => x.id === id)) {
-            set({ columns: state.columns.filter((x) => x.id !== id) });
-            db.delete('columns', id);
-            changed = true;
-          }
-          break;
-        }
-        case 'card.create':
-        case 'card.update':
-        case 'card.move': {
-          const [next, c] = upsert(state.cards, payload as unknown as Card & { __ts?: number });
-          if (c) {
-            set({ cards: next });
-            db.put('cards', payload);
-            changed = true;
-          }
-          break;
-        }
-        case 'card.delete': {
-          const { id } = payload as { id: string };
-          if (state.cards.find((x) => x.id === id)) {
-            set({ cards: state.cards.filter((x) => x.id !== id) });
-            db.delete('cards', id);
-            changed = true;
-          }
-          break;
-        }
-        case 'activity.create': {
-          const event = payload as unknown as ActivityEvent;
-          if (!state.activity.find((a) => a.id === event.id)) {
-            set({ activity: [event, ...state.activity] });
-            db.put('activity', event);
-            changed = true;
-          }
-          break;
+      const data = parseData(JSON.parse(json));
+      const grouped = new Map<string, { type: string; payload: Record<string, unknown> }[]>();
+      for (const [store, type] of [['boards', 'board.update'], ['columns', 'column.create'], ['cards', 'card.create'], ['activity', 'activity.create']] as const) {
+        for (const row of Object.values(data[store]).map(stripMeta)) {
+          const boardId = String(store === 'boards' ? row.id : row.boardId);
+          const list = grouped.get(boardId) ?? [];
+          list.push({ type, payload: { ...row, boardId } });
+          grouped.set(boardId, list);
         }
       }
-      return changed;
+      for (const [boardId, ops] of grouped) await commit(boardId, ops);
+      get().toast('Data imported', '✓');
     },
   };
 });

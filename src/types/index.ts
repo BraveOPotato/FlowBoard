@@ -153,5 +153,4 @@ export interface FlowState {
   joinBoard: (boardId: string, password: string) => Promise<boolean>;
   exportData: () => void;
   importData: (json: string) => Promise<void>;
-  applyCrdtOp: (op: CrdtOp, clientId: string) => boolean;
 }

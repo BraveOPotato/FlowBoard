@@ -1,5 +1,6 @@
-import { DB_NAME, DB_VERSION } from '../constants';
-import type { StoreName } from '../types';
+import { DB_NAME, DB_VERSION } from '../constants.ts';
+import { applyOp, mergeStates, type CrdtState } from './crdt.ts';
+import type { CrdtOp, StoreName } from '../types';
 
 export class DatabaseService {
   private db: IDBDatabase | null = null;
@@ -45,18 +46,20 @@ export class DatabaseService {
   put<T>(store: StoreName, obj: T): Promise<void> {
     return new Promise((res, rej) => {
       if (!this.db) return rej(new Error('DB not open'));
-      const req = this.db.transaction(store, 'readwrite').objectStore(store).put(obj);
-      req.onsuccess = () => res();
-      req.onerror = () => rej(req.error);
+      const tx = this.db.transaction(store, 'readwrite');
+      tx.objectStore(store).put(obj);
+      tx.oncomplete = () => res();
+      tx.onabort = () => rej(tx.error ?? new Error('Write aborted'));
     });
   }
 
   delete(store: StoreName, key: string): Promise<void> {
     return new Promise((res, rej) => {
       if (!this.db) return rej(new Error('DB not open'));
-      const req = this.db.transaction(store, 'readwrite').objectStore(store).delete(key);
-      req.onsuccess = () => res();
-      req.onerror = () => rej(req.error);
+      const tx = this.db.transaction(store, 'readwrite');
+      tx.objectStore(store).delete(key);
+      tx.oncomplete = () => res();
+      tx.onabort = () => rej(tx.error ?? new Error('Delete aborted'));
     });
   }
 
@@ -76,7 +79,43 @@ export class DatabaseService {
       const os = tx.objectStore(store);
       for (const item of items) os.put(item);
       tx.oncomplete = () => res();
-      tx.onerror = () => rej(tx.error);
+      tx.onabort = () => rej(tx.error ?? new Error('Batch aborted'));
+    });
+  }
+
+  // Native IDB transaction serializes concurrent tabs and commits records, versions, tombstones
+  // and the outbox together. Never acknowledge a remote read before this transaction completes.
+  updateSyncState(boardId: string, initial: CrdtState, update: (state: CrdtState) => CrdtOp[]): Promise<CrdtState> {
+    return new Promise((resolve, reject) => {
+      if (!this.db) return reject(new Error('DB not open'));
+      const tx = this.db.transaction(['settings', 'boards', 'columns', 'cards', 'activity', 'crdtOps'], 'readwrite');
+      const key = `crdtState:${boardId}`;
+      const read = tx.objectStore('settings').get(key);
+      const pending = tx.objectStore('crdtOps').index('boardId').getAll(boardId);
+      let next: CrdtState;
+      // Requests execute in order; include the durable outbox when upgrading an old client.
+      pending.onsuccess = () => {
+        try {
+          next = read.result ? mergeStates(initial, read.result.value) : initial;
+          for (const op of pending.result as CrdtOp[]) applyOp(next, op);
+          const ops = update(next);
+          for (const store of ['boards', 'columns', 'cards', 'activity'] as const) {
+            for (const row of Object.values(next[store])) {
+              const os = tx.objectStore(store);
+              const existing = os.get(row.id);
+              existing.onsuccess = () => {
+                if (existing.result && store !== 'boards' && existing.result.boardId !== boardId) { tx.abort(); return; }
+                if (row.__deleted) os.delete(row.id);
+                else os.put(row);
+              };
+            }
+          }
+          tx.objectStore('settings').put({ key, value: next });
+          for (const op of ops) tx.objectStore('crdtOps').put(op);
+        } catch (error) { tx.abort(); reject(error); }
+      };
+      tx.oncomplete = () => resolve(next);
+      tx.onabort = () => reject(tx.error ?? new Error('Sync transaction aborted'));
     });
   }
 }
