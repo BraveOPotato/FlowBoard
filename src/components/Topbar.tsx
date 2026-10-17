@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useFlowStore } from '../store/useFlowStore';
-import { cx } from '../utils';
+import { DEFAULT_FILTERS, cx } from '../utils';
 import { Icon, type IconName } from './Icon';
 import type { View } from '../types';
 import s from './Topbar.module.css';
@@ -15,10 +15,12 @@ const VIEWS: { id: View; label: string; icon: IconName }[] = [
 const isTyping = (el: EventTarget | null) =>
   el instanceof HTMLElement && (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || el.isContentEditable);
 
-export function Topbar({ onOpenNav, sidebarHidden, onToggleSidebar, statsVisible, onToggleStats }: { onOpenNav: () => void; sidebarHidden: boolean; onToggleSidebar: () => void; statsVisible: boolean; onToggleStats: () => void }) {
+export function Topbar({ onOpenNav, sidebarHidden, onToggleSidebar, filtersOpen, onToggleFilters }: { onOpenNav: () => void; sidebarHidden: boolean; onToggleSidebar: () => void; filtersOpen: boolean; onToggleFilters: () => void }) {
   const board = useFlowStore((st) => st.boards.find((b) => b.id === st.activeBoardId));
   const activeView = useFlowStore((st) => st.activeView);
   const query = useFlowStore((st) => st.searchQuery);
+  const filters = useFlowStore((st) => st.filters);
+  const activeFilters = (Object.keys(DEFAULT_FILTERS) as (keyof typeof filters)[]).filter((k) => filters[k] !== DEFAULT_FILTERS[k]).length;
   const { setActiveView, setSearchQuery, openModal } = useFlowStore.getState();
   const searchRef = useRef<HTMLInputElement>(null);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -64,13 +66,13 @@ export function Topbar({ onOpenNav, sidebarHidden, onToggleSidebar, statsVisible
   return (
     <header className={s.topbar}>
       <button className={cx(ui.iconBtn, s.sidebarBtn)} onClick={onToggleSidebar} aria-label={sidebarHidden ? 'Show sidebar' : 'Hide sidebar'} title={sidebarHidden ? 'Show sidebar' : 'Hide sidebar'} aria-expanded={!sidebarHidden} aria-controls="workspace-sidebar">
-        <Icon name="menu" size={18} />
+        <Icon name="sidebar" size={18} />
       </button>
       <button className={cx(ui.iconBtn, s.navBtn)} onClick={onOpenNav} aria-label="Open navigation">
         <Icon name="menu" size={18} />
       </button>
 
-      <div className={s.breadcrumb}><span>Workspace</span><Icon name="chevronRight" size={12} /><span className={s.title}>{board?.name ?? 'FlowBoard'}</span></div>
+      <h1 className={s.title}>{board?.name ?? 'FlowBoard'}</h1>
 
       <nav className={s.views} role="tablist" aria-label="View">
         {VIEWS.map((v) => (
@@ -101,8 +103,10 @@ export function Topbar({ onOpenNav, sidebarHidden, onToggleSidebar, statsVisible
 
       <div className={s.spacer} />
 
-      <button className={cx(ui.btn, ui.sm, statsVisible ? s.statsActive : ui.ghost)} onClick={onToggleStats} aria-pressed={statsVisible} aria-expanded={statsVisible} aria-controls="board-toolbar" disabled={!board}>
-        Stats
+      <button className={cx(ui.btn, ui.sm, s.filterBtn, filtersOpen || activeFilters ? s.filterActive : ui.ghost)} onClick={onToggleFilters} aria-expanded={filtersOpen} aria-controls="board-toolbar" disabled={!board} title="Filter cards">
+        <Icon name="filter" size={15} />
+        <span className={s.filterLabel}>Filter</span>
+        {activeFilters > 0 && <span className={s.badge} aria-label={`${activeFilters} active`}>{activeFilters}</span>}
       </button>
 
       <div className={cx(s.search, (searchOpen || query) && s.searchOpen)}>

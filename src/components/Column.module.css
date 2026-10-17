@@ -8,7 +8,6 @@
   border-radius: var(--radius-lg);
   border: 1px solid var(--line);
   background: color-mix(in srgb, var(--surface) 82%, var(--canvas));
-  border-top: 2px solid color-mix(in srgb, var(--column-color, var(--line)) 55%, var(--surface));
 }
 
 .header {
@@ -95,7 +94,7 @@
   color: var(--fg-subtle);
   font-size: 12.5px;
 }
-.empty small { font-size: 11px; opacity: .75; }
+.empty small { font-size: 12px; }
 .empty > svg { opacity: .6; }
 
 .addCard {

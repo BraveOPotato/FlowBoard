@@ -224,7 +224,7 @@ export function CardModal({ card, defaultColId }: { card?: Card; defaultColId?: 
               <Icon name="trash" size={15} /> Delete
             </button>
           )}
-          <span className={s.hint}><kbd className={ui.kbd}>Ctrl</kbd><kbd className={ui.kbd}>↵</kbd></span>
+          <span className={s.hint}><kbd className={ui.kbd}>{/Mac|iP/.test(navigator.platform) ? '⌘' : 'Ctrl'}</kbd><kbd className={ui.kbd}>↵</kbd> to save</span>
           <button type="button" className={cx(ui.btn, ui.secondary)} onClick={closeModal}>Cancel</button>
           <button type="submit" className={cx(ui.btn, ui.primary)} disabled={busy}>{busy ? 'Saving…' : isNew ? 'Create card' : 'Save changes'}</button>
         </footer>

@@ -21,6 +21,7 @@ const PATHS = {
   pencil: <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />,
   check: <path d="M20 6 9 17l-5-5" />,
   menu: <path d="M4 6h16M4 12h16M4 18h16" />,
+  sidebar: <><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9.5 4v16" /></>,
   alert: <><path d="m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" /><path d="M12 9v4M12 17h.01" /></>,
   clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
   cloud: <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" />,

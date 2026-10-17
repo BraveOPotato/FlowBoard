@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useFlowStore } from '../store/useFlowStore';
@@ -32,7 +32,7 @@ export function SortableColumn({ col, cards, totalCount }: { col: Column; cards:
   return (
     <section
       ref={setNodeRef}
-      style={{ transform: CSS.Translate.toString(transform), transition, '--column-color': col.color } as CSSProperties}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cx(s.column, isDragging && s.placeholder)}
       aria-label={col.name}
     >
@@ -52,10 +52,7 @@ export function SortableColumn({ col, cards, totalCount }: { col: Column; cards:
           )}
           <span className={ui.count} title={`${totalCount} cards in this column`}>{cards.length === totalCount ? cards.length : `${cards.length}/${totalCount}`}</span>
         </div>
-        <button className={cx(ui.iconBtn, ui.small, s.action)} onClick={() => setAdding(true)} aria-label={`Add card to ${col.name}`} title="Add card">
-          <Icon name="plus" size={15} />
-        </button>
-        <button className={cx(ui.iconBtn, ui.small, s.action, menu && s.actionActive)} onClick={(e) => setMenu(menu ? null : e.currentTarget)} aria-label="Column options" aria-haspopup="menu">
+        <button className={cx(ui.iconBtn, ui.small, s.action, menu && s.actionActive)} onClick={(e) => setMenu(menu ? null : e.currentTarget)} aria-label={`Options for ${col.name}`} aria-haspopup="menu">
           <Icon name="more" size={15} />
         </button>
       </header>
@@ -64,7 +61,7 @@ export function SortableColumn({ col, cards, totalCount }: { col: Column; cards:
         <SortableContext items={cards.map((c) => c.id)} strategy={verticalListSortingStrategy}>
           {cards.map((card) => <SortableCard key={card.id} card={card} />)}
         </SortableContext>
-        {cards.length === 0 && !adding && <div className={s.empty}><Icon name={totalCount ? 'filter' : 'plus'} size={18} /><span>{totalCount ? 'No matching cards' : 'Ready for what’s next'}</span><small>{totalCount ? 'Adjust your filters to see more.' : 'Drop a card here or add one below.'}</small></div>}
+        {cards.length === 0 && !adding && <div className={s.empty}><Icon name={totalCount ? 'filter' : 'plus'} size={18} /><span>{totalCount ? 'No matching cards' : 'No cards yet'}</span><small>{totalCount ? 'Adjust your filters to see more.' : 'Drag a card here or add one below.'}</small></div>}
         {adding && <QuickAdd boardId={col.boardId} columnId={col.id} onDone={() => setAdding(false)} />}
       </div>
 

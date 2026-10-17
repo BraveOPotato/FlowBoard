@@ -25,7 +25,7 @@ export function Backlog({ cards, totalCount }: { cards: Card[]; totalCount: numb
           <span className={ui.count}>{cards.length === totalCount ? cards.length : `${cards.length}/${totalCount}`}</span>
         </button>
         <button className={cx(ui.btn, ui.ghost, ui.sm)} onClick={() => openModal('card', {})}>
-          <Icon name="plus" size={14} /> Add item
+          <Icon name="plus" size={14} /> Add card
         </button>
       </header>
       <div className={s.body} inert={!open}>
@@ -34,7 +34,7 @@ export function Backlog({ cards, totalCount }: { cards: Card[]; totalCount: numb
             <SortableContext items={cards.map((c) => c.id)} strategy={horizontalListSortingStrategy}>
               {cards.map((card) => <SortableCard key={card.id} card={card} className={s.item} compact />)}
             </SortableContext>
-            {cards.length === 0 && <div className={s.empty}>{totalCount ? 'No matching backlog cards. Try adjusting your filters.' : 'A little breathing room for ideas. Drag unscheduled work here.'}</div>}
+            {cards.length === 0 && <div className={s.empty}>{totalCount ? 'No matching backlog cards. Try adjusting your filters.' : 'Cards that aren’t in a column yet. Drag one here to set it aside.'}</div>}
           </div>
         </div>
       </div>

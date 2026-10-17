@@ -158,7 +158,7 @@
 .checklist { margin-top: 12px; padding-top: 16px; border-top: 1px solid var(--line); }
 .checkHead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .checkHead h3 { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 500; }
-.checkHead > span { font-size: 11px; font-family: var(--font-mono); color: var(--fg-subtle); }
+.checkHead > span { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--fg-subtle); }
 .checklist progress { appearance: none; height: 4px; width: 100%; display: block; margin-bottom: 12px; border: none; border-radius: 3px; overflow: hidden; background: var(--line); color: var(--accent); }
 .checklist progress::-webkit-progress-bar { background: var(--line); }
 .checklist progress::-webkit-progress-value { background: var(--accent); }
@@ -183,7 +183,7 @@
 }
 .footer .deleteBtn { color: var(--fg-subtle); }
 .footer .deleteBtn:hover:not(:disabled) { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
-.hint { display: flex; gap: 3px; margin-left: auto; margin-right: 6px; }
+.hint { display: flex; align-items: center; gap: 3px; margin-left: auto; margin-right: 6px; font-size: 12px; color: var(--fg-subtle); }
 
 @media (max-width: 760px) {
   .layout { grid-template-columns: 1fr; }

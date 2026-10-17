@@ -36,10 +36,6 @@
 }
 .brandName { flex: 1; font-size: 15px; font-weight: 650; letter-spacing: -0.02em; }
 .brand .close { display: none; }
-.workspaceCard { display: flex; align-items: center; gap: 10px; padding: 12px 8px; border-block: 1px solid var(--line); margin: 0 0 20px; }
-.workspaceIcon { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--accent); background: var(--accent-soft); }
-.workspaceCard strong { display: block; font-size: 12px; font-weight: 500; }
-.workspaceCard small { display: block; font-size: 10px; margin-top: 2px; color: var(--fg-subtle); }
 .shortcutKey { margin-left: auto; }
 
 .sectionHead {
@@ -49,10 +45,8 @@
   height: 28px;
   padding: 0 4px 0 8px;
   margin-bottom: 2px;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 500;
   color: var(--fg-subtle);
 }
 

@@ -31,20 +31,20 @@ export function CardView({ card, variant, compact = false }: { card: Card; varia
   return (
     <div className={cx(s.card, variant && s[variant], compact && s.compactCard)}>
       {hasColor && <span className={s.stripe} style={{ background: card.color }} />}
-      {card.tags.length > 0 && <div className={s.labels}>{card.tags.slice(0, 3).map((t) => <Tag key={t} name={t} />)}{card.tags.length > 3 && <span className={s.extraTags} title={card.tags.slice(3).join(', ')}>+{card.tags.length - 3}</span>}</div>}
       <div className={s.title}>{card.title}</div>
       {card.desc && <p className={s.desc}>{card.desc}</p>}
       <div className={s.meta}>
-        <span className={cx(s.priorityLabel, card.priority === 'high' && s.urgent)}><PriorityIcon priority={card.priority} />{card.priority === 'high' ? 'High' : card.priority === 'medium' ? 'Medium' : 'Low'}</span>
+        <span className={cx(s.priorityLabel, card.priority === 'high' && s.urgent)}><PriorityIcon priority={card.priority} />{card.priority === 'high' && 'High'}</span>
         {due && (
           <span className={cx(s.due, s[due.state])}>
             <Icon name="clock" size={12} strokeWidth={2} />
             {due.label}
           </span>
         )}
+        {card.tags.slice(0, 2).map((t) => <Tag key={t} name={t} />)}
+        {card.tags.length > 2 && <span className={s.extraTags} title={card.tags.slice(2).join(', ')}>+{card.tags.length - 2}</span>}
         {!!checklist.length && <span className={cx(s.checklist, done === checklist.length && s.complete)} title={`${done} of ${checklist.length} tasks complete`}><Icon name="checklist" size={13} />{done}/{checklist.length}</span>}
       </div>
-      {!!checklist.length && <progress className={s.progress} value={done} max={checklist.length} aria-label="Checklist progress" />}
     </div>
   );
 }
