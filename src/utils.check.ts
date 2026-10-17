@@ -2,6 +2,7 @@
 // Run: node src/utils.check.ts
 import assert from 'node:assert/strict';
 import { DEFAULT_FILTERS, formatDue, hasFilters, matchesCard, planMove } from './utils.ts';
+import { THEMES } from './constants.ts';
 import type { Card } from './types';
 
 const card = (id: string, boardId: string, columnId: string | null, order: number) =>
@@ -55,5 +56,19 @@ const restoredUpdates = planMove([...removed, cards[1]], 'b', 'todo', 1);
 const restored = [...removed, cards[1]].map((c) => restoredUpdates.get(c.id) ?? c);
 assert.deepEqual(order(restored, 'b1', 'todo'), ['a', 'b', 'c']);
 assert.equal(restoredUpdates.has('other'), false);
+
+// Every theme keeps secondary text and primary-button text at WCAG AA (4.5:1) on all its surfaces.
+const lum = (hex: string) => {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+const contrast = (a: string, b: string) => { const [hi, lo] = [lum(a), lum(b)].sort((p, q) => q - p); return (hi + 0.05) / (lo + 0.05); };
+for (const t of THEMES) {
+  for (const bg of [t.canvas, t.sidebar, t.surface, t.card]) {
+    assert.ok(contrast(t.fgSubtle, bg) >= 4.5, `${t.id}: fgSubtle on ${bg}`);
+    assert.ok(contrast(t.fgMuted, bg) >= 4.5, `${t.id}: fgMuted on ${bg}`);
+  }
+  assert.ok(contrast(t.accentFg, t.accent) >= 4.5, `${t.id}: accentFg on accent`);
+}
 
 console.log('utils checks passed');
