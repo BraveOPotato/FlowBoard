@@ -72,10 +72,25 @@ Boards expire after **90 days without reads or writes**. Local data is unaffecte
 1. Back up the existing D1 database (Cloudflare D1 export/Time Travel) and export important boards from the app.
 2. Set `database_id` in `worker/wrangler.toml` to the **existing** production D1 ID. Do not replace it with a new empty database. The binding must be `flowboard_db`.
 3. Deploy the worker **before** the frontend. No schema changes are needed for existing D1 deployments.
-4. Deploy the frontend and reload every active client/PWA. Old clients still use the unsafe timestamp cursor; they do not gain the new recovery behavior until updated.
-5. Smoke-test joining, editing from two devices, deletion/Undo, and an offline edit followed by reconnecting. Historical data already lost by the old GC must be restored from a backup; these fixes cannot recreate it.
+4. Deploy the frontend and reload every active client/PWA. The worker rejects writes from older clients with HTTP 409, leaving their pending operations on the device until it is updated. Updated clients also refuse to sync with an older worker.
+5. If **Sync recovery needed** appears, open **Settings → Advanced**. Legacy boards without reliable conflict metadata are backed up in IndexedDB and paused before any cloud merge or upload. Local editing remains available, and the pause survives reloads.
+6. **Export recovery backup** before resolving a paused board. The JSON contains the current board (importable as a regular export), the original local version, and the cloud state if reachable. Compare these with any known-good device/export. **Use this device** explicitly makes its current cards and columns authoritative, deleting cloud-only cards/columns; **Use cloud** explicitly replaces local cards/columns with the fetched cloud version. Neither choice is automatic. Both histories and the pre-resolution local version remain backed up on the device. Do not clear browser storage. Update/close every other client first, and resolve any other paused device using the recovered cloud version rather than publishing its stale local copy.
+7. Smoke-test joining, editing from two devices, deletion/Undo, and an offline edit followed by reconnecting. Historical data already lost by the old GC or an earlier upgrade must be restored from a backup; these fixes cannot recreate it.
 
-The worker keeps the legacy endpoints for compatibility. New clients use versioned state reads, including tombstones, so they can recover after operation-log pruning. Snapshots and pruning commit atomically with compare-and-swap protection against concurrent snapshots. Client records, conflict versions and pending operations commit in one IndexedDB transaction.
+The worker keeps legacy data readable, but both write endpoints require the current sync protocol. New clients use versioned state reads, including tombstones, so they can recover after operation-log pruning. Snapshots and pruning commit atomically with compare-and-swap protection against concurrent snapshots. Client records, conflict versions, pending operations and recovery decisions commit in one IndexedDB transaction.
+
+After an explicit recovery, the chosen versioned board becomes authoritative for new joins. Stale full-state rows remain in D1 for backup purposes but are not reapplied to the recovered board.
+
+### Repairing an already-upgraded or rejoined board
+
+1. Open **Settings → Advanced**, select the affected board, and click **Repair this board**. This saves a local recovery backup and pauses only that board, even when its sync metadata looks valid.
+2. Export the recovery backup. Compare it with a known-good device or JSON export before choosing **Use this device**, **Use cloud**, or **Overwrite import**.
+3. **Overwrite import** accepts a FlowBoard JSON export containing the selected board's exact ID (including a multi-board export or the normal board portion of a recovery export). Only that board is replaced. Cards, columns, and Timeline activity become exactly the snapshot; missing activity means an empty Timeline. This is not the additive **Import JSON** action.
+4. After validation and explicit confirmation, overwrite replaces the cloud snapshot and removes its old live operation log in one transaction. A new board generation rejects pre-repair uploads, including from clients running the same protocol version. If the cloud changes during repair, the overwrite is rejected rather than erasing concurrent work. The complete request, including the expected cloud state, must fit the worker's 1 MB limit.
+5. Previous local data, pending operations, and the fetched cloud state remain in separate IndexedDB recovery backups, included in **Export recovery backup**. A failed or unconfirmed overwrite leaves the board paused. Do not clear browser storage. If the cloud replacement succeeded but the local commit failed, **Use cloud** adopts the repaired board.
+6. Update/reload other devices. They pause on a changed generation; **Use cloud** adopts the replacement exactly, including its Timeline, while archiving the superseded local outbox. Do not publish stale device copies unless you explicitly intend to replace the repaired board again.
+
+Deploy the updated worker before the frontend. This repair endpoint uses the existing D1 schema; no database recreation or migration is required.
 
 ### Prerequisites
 

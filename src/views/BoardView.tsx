@@ -48,7 +48,7 @@ export function BoardView() {
     return items;
   }, [cards, columns, activeBoardId, query, filters]);
 
-  // While a card is dragged we render from a local copy so cross-container moves show live.
+  // Keep a local layout during dragging and saving so cards never flash back to their old position.
   const [dragItems, setDragItems] = useState<Items | null>(null);
   const [active, setActive] = useState<{ id: string; type: 'Card' | 'Column' } | null>(null);
   const items = dragItems ?? baseItems;
@@ -140,26 +140,35 @@ export function BoardView() {
     const currentIndex = card.columnId === columnId
       ? cards.filter((c) => c.boardId === card.boardId && c.columnId === columnId).sort(byOrder).indexOf(card)
       : -1;
-    if (index !== currentIndex) moveCard(id, columnId, index);
+    if (index !== currentIndex) return moveCard(id, columnId, index);
   };
 
-  const onDragEnd = ({ active: a, over }: DragEndEvent) => {
-    if (over && a.data.current?.type === 'Column') {
-      const from = columns.findIndex((c) => c.id === a.id);
-      const to = columns.findIndex((c) => c.id === over.id);
-      if (from >= 0 && to >= 0 && from !== to) reorderColumns(arrayMove(columns, from, to).map((c) => c.id));
-    } else if (over && dragItems) {
-      const container = findContainer(dragItems, a.id);
-      if (container) {
-        let list = dragItems[container];
-        const from = list.indexOf(String(a.id));
-        const to = list.indexOf(String(over.id));
-        if (to >= 0 && from !== to) list = arrayMove(list, from, to);
-        commitCard(String(a.id), container, list);
+  // Let dnd-kit finish the drop only after the local layout has been persisted.
+  const cancelDrop = async ({ active: a, over }: DragEndEvent) => {
+    try {
+      if (over && a.data.current?.type === 'Column') {
+        const from = columns.findIndex((c) => c.id === a.id);
+        const to = columns.findIndex((c) => c.id === over.id);
+        if (from >= 0 && to >= 0 && from !== to) await reorderColumns(arrayMove(columns, from, to).map((c) => c.id));
+      } else if (over && dragItems) {
+        const container = findContainer(dragItems, a.id);
+        if (container) {
+          let list = dragItems[container];
+          const from = list.indexOf(String(a.id));
+          const to = list.indexOf(String(over.id));
+          if (to >= 0 && from !== to) list = arrayMove(list, from, to);
+          setDragItems({ ...dragItems, [container]: list });
+          await commitCard(String(a.id), container, list);
+        }
       }
+      return false;
+    } catch {
+      useFlowStore.getState().toast('Couldn’t save the move. Try again.', '⚠');
+      return true;
+    } finally {
+      setActive(null);
+      setDragItems(null);
     }
-    setActive(null);
-    setDragItems(null);
   };
 
   const onDragCancel = () => { setActive(null); setDragItems(null); };
@@ -189,7 +198,7 @@ export function BoardView() {
       measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
       onDragStart={onDragStart}
       onDragOver={onDragOver}
-      onDragEnd={onDragEnd}
+      cancelDrop={cancelDrop}
       onDragCancel={onDragCancel}
     >
         <div className={s.board}>

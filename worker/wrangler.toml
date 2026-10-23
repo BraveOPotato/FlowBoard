@@ -6,7 +6,7 @@ compatibility_date = "2024-01-01"
 [[d1_databases]]
 binding = "flowboard_db"
 database_name = "flowboard-db"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_id = "d634a34d-6d02-441d-94ba-93f076f9f45c"
 
 [triggers]
 crons = ["0 3 * * *"]

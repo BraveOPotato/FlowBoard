@@ -118,6 +118,7 @@ export interface FlowState {
   modal: ModalState | null;
   toasts: Toast[];
   workerStatus: boolean;
+  syncRecoveryBoardIds: string[];
   workerUrl: string;
   syncInterval: number;
   isLoading: boolean;
@@ -151,6 +152,10 @@ export interface FlowState {
   saveTheme: (id: string) => Promise<void>;
   saveSettings: (settings: { workerUrl: string; syncInterval: number }) => Promise<void>;
   joinBoard: (boardId: string, password: string) => Promise<boolean>;
+  beginSyncRepair: (boardId: string) => Promise<void>;
+  overwriteImport: (boardId: string, json: string) => Promise<void>;
+  resolveSyncRecovery: (boardId: string, source: 'local' | 'cloud') => Promise<void>;
+  exportSyncRecovery: (boardId: string) => Promise<void>;
   exportData: () => void;
   importData: (json: string) => Promise<void>;
 }

@@ -72,6 +72,13 @@
 .sectionHead p { margin-top: 2px; font-size: 12.5px; color: var(--fg-muted); }
 .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.settingsTabs { display: flex; gap: 2px; margin-bottom: 20px; padding: 3px; border-radius: 10px; background: var(--hover); }
+.settingsTab { flex: 1; min-width: 0; height: 34px; padding: 0 10px; border: none; border-radius: 7px; background: transparent; color: var(--fg-muted); font-size: 13px; font-weight: 500; }
+.settingsTab:hover:not(:disabled) { color: var(--fg); }
+.settingsTab[aria-selected='true'] { background: var(--raised); color: var(--fg); box-shadow: var(--shadow-sm), 0 0 0 1px var(--line); }
+.settingsTab:disabled { opacity: 0.5; }
+.advanced > .message { margin-top: 14px; font-size: 12.5px; }
+.repairPanel { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
 
 .status {
   display: inline-flex;

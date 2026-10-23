@@ -2,12 +2,13 @@
 import assert from 'node:assert/strict';
 import worker from './index.js';
 import { createDatabase } from './test-db.js';
+import { SYNC_PROTOCOL } from '../src/services/crdt.ts';
 
 const { sql, env } = createDatabase();
 
 const keyHash = 'a'.repeat(64);
 const boardId = 'b1';
-const call = async (path, body = {}) => (await worker.fetch(new Request(`https://w${path}`, { method: 'POST', body: JSON.stringify({ boardId, keyHash, ...body }) }), env)).json();
+const call = async (path, body = {}) => (await worker.fetch(new Request(`https://w${path}`, { method: 'POST', body: JSON.stringify({ boardId, keyHash, protocolVersion: SYNC_PROTOCOL, ...body }) }), env)).json();
 let n = 0;
 const op = (type, ts, payload) => ({ opId: `op${++n}`, type, ts, clientId: 'c', payload });
 const push = (...ops) => call('/api/crdt/ops/push', { ops });
@@ -47,6 +48,11 @@ j = await join();
 assert.deepEqual(j.data, { enc: 1 });
 assert.deepEqual(j.cardIds, ['A', 'B', 'C', 'D']);
 
+await push(op('board.update', Date.now() + 10, { boardId, id: boardId, name: 'Recovered', syncProtocol: SYNC_PROTOCOL }));
+j = await join();
+assert.deepEqual(j.data.cards.map(c => c.id).sort(), j.cardIds, 'recovery prevents a stale legacy baseline from being reapplied');
+assert.deepEqual(JSON.parse(sql.prepare('SELECT data FROM boards WHERE key_hash = ?').get(keyHash).data), { enc: 1 }, 'retain legacy data for backup, not live sync');
+
 // Cron: a board with recent activity keeps its oldest ops; an idle board is removed entirely.
 const idle = 'f'.repeat(64);
 sql.prepare('UPDATE crdt_ops SET updated_at = 0 WHERE type = ?').run('column.create');
@@ -62,7 +68,7 @@ console.log('worker checks passed');
 
 // A late offline op arrives after a snapshot's read but before its write/GC.
 const race = createDatabase();
-const raceCall = async (path, body = {}) => worker.fetch(new Request(`https://w${path}`, { method: 'POST', body: JSON.stringify({ boardId, keyHash, ...body }) }), race.env);
+const raceCall = async (path, body = {}) => worker.fetch(new Request(`https://w${path}`, { method: 'POST', body: JSON.stringify({ boardId, keyHash, protocolVersion: SYNC_PROTOCOL, ...body }) }), race.env);
 await raceCall('/api/crdt/ops/push', { ops: [op('card.create', old, { id: 'before', boardId })] });
 race.env.flowboard_db.beforeBatch = async (ss) => {
   if (!ss[0].query.includes('INSERT INTO crdt_snapshots')) return;
@@ -116,3 +122,83 @@ for (const bad of [null, { ...op('unknown', 0, { id: 'x' }) }, op('card.create',
   assert.equal((await raceCall('/api/crdt/ops/push', { ops: [bad] })).status, 400);
 }
 console.log('worker concurrency, rollback, TTL and validation checks passed');
+
+// Cached old clients cannot overwrite a recovered board, through either write API.
+const before = (await (await raceCall('/api/crdt/state/get')).json()).state;
+for (const protocolVersion of [undefined, 1, SYNC_PROTOCOL + 1]) {
+  assert.equal((await raceCall('/api/crdt/ops/push', { protocolVersion, ops: [op('card.update', Date.now(), { id: 'tie', boardId, title: 'stale client' })] })).status, 409);
+  assert.equal((await raceCall('/api/board/put', { protocolVersion, data: { cards: [] } })).status, 409);
+}
+assert.deepEqual((await (await raceCall('/api/crdt/state/get')).json()).state, before);
+console.log('outdated-client writes rejected without changing shared state');
+
+// Overwrite is one atomic history replacement, not a batch of ordinary edits.
+const snapshot = {
+  boards: [{ id: boardId, name: 'Restored board', createdAt: 1 }],
+  columns: [{ id: 'restored-column', boardId, name: 'Done', order: 0, color: '#888888' }],
+  cards: [{ id: 'restored-card', boardId, columnId: 'restored-column', title: 'Snapshot ticket', desc: '', tags: [], color: 'transparent', priority: 'medium', dueDate: null, order: 0, createdAt: 1 }],
+  activity: [{ id: 'restored-event', boardId, cardId: 'restored-card', type: 'created', ts: 1 }],
+};
+const cloudState = async () => (await (await raceCall('/api/crdt/state/get')).json()).state;
+const reset = async (resetId, expected = undefined) => raceCall('/api/crdt/state/replace', { resetId, snapshot, expected: expected === undefined ? await cloudState() : expected });
+const beforeInvalid = await cloudState();
+for (const invalid of [{}, { ...snapshot, boards: [{ id: 'another-board', name: 'Wrong', createdAt: 1 }] },
+  { ...snapshot, cards: [...snapshot.cards, ...snapshot.cards] },
+  { ...snapshot, columns: [] }, { ...snapshot, cards: [{ ...snapshot.cards[0], title: null }] },
+  { ...snapshot, cards: [{ ...snapshot.cards[0], boardId: undefined }] }]) {
+  assert.equal((await raceCall('/api/crdt/state/replace', { resetId: 'invalid', snapshot: invalid, expected: beforeInvalid })).status, 400);
+}
+assert.deepEqual(await cloudState(), beforeInvalid, 'invalid snapshots never modify the board');
+
+// A write between the repair read and commit must not be erased by that repair.
+race.env.flowboard_db.beforeBatch = async ss => {
+  if (!ss[0].query.includes('INSERT INTO crdt_snapshots')) return;
+  race.env.flowboard_db.beforeBatch = null;
+  await raceCall('/api/crdt/ops/push', { ops: [op('card.create', Date.now(), { id: 'arrived-during-reset', boardId })] });
+};
+assert.equal((await reset('conflicted')).status, 409);
+assert.ok((await cloudState()).cards['arrived-during-reset'], 'concurrent work survives a rejected overwrite');
+
+const beforeReset = await cloudState();
+const beforeResetLog = race.sql.prepare('SELECT COUNT(*) AS n FROM crdt_ops').get().n;
+race.sql.exec("CREATE TRIGGER fail_reset BEFORE DELETE ON crdt_ops BEGIN SELECT RAISE(ABORT, 'simulated reset failure'); END");
+console.error = () => {};
+try { assert.equal((await reset('failed', beforeReset)).status, 500); }
+finally { console.error = log; }
+assert.deepEqual(await cloudState(), beforeReset, 'failed overwrite rolls back its snapshot');
+assert.equal(race.sql.prepare('SELECT COUNT(*) AS n FROM crdt_ops').get().n, beforeResetLog, 'failed overwrite retains history');
+race.sql.exec('DROP TRIGGER fail_reset');
+
+assert.equal((await reset('reset-one', beforeReset)).status, 200);
+let restored = await cloudState();
+assert.deepEqual(Object.keys(restored.cards), ['restored-card']);
+assert.deepEqual(Object.keys(restored.activity), ['restored-event'], 'old Timeline events are not merged');
+assert.equal(restored.boards[boardId].syncGeneration, 'reset-one');
+assert.equal(race.sql.prepare('SELECT COUNT(*) AS n FROM crdt_ops').get().n, 0, 'old live operation history is removed');
+assert.deepEqual((await (await raceCall('/api/board/get')).json()).data.cards.map(c => c.id), ['restored-card']);
+for (const generation of [undefined, '', 'older-generation']) {
+  assert.equal((await raceCall('/api/crdt/ops/push', { generation, ops: [op('card.create', Date.now() + 1e12, { id: 'resurrected', boardId })] })).status, 409);
+}
+assert.equal((await raceCall('/api/board/put', { data: { cards: [] } })).status, 409);
+assert.deepEqual(await cloudState(), restored, 'old devices cannot resurrect records, even with future timestamps');
+assert.equal((await raceCall('/api/crdt/ops/push', { generation: 'reset-one', ops: [op('card.update', Date.now() + 100, { id: 'restored-card', boardId, title: 'After reset' })] })).status, 200);
+assert.equal((await reset('reset-one', beforeReset)).status, 200, 'retrying the same reset ID is idempotent');
+assert.equal((await cloudState()).cards['restored-card'].title, 'After reset', 'a retry does not wipe post-reset work');
+await raceCall('/api/crdt/state/snapshot');
+assert.equal((await cloudState()).boards[boardId].syncGeneration, 'reset-one', 'ordinary compaction preserves the generation');
+
+// A queued upload that passed an earlier read is fenced inside its insert transaction.
+race.env.flowboard_db.beforeBatch = async ss => {
+  if (!ss[0].query.includes('INSERT OR IGNORE INTO crdt_ops')) return;
+  race.env.flowboard_db.beforeBatch = null;
+  assert.equal((await reset('reset-two')).status, 200);
+};
+assert.equal((await raceCall('/api/crdt/ops/push', { generation: 'reset-one', ops: [op('card.create', Date.now() + 1e12, { id: 'racy-old-upload', boardId })] })).status, 409);
+restored = await cloudState();
+assert.equal(restored.boards[boardId].syncGeneration, 'reset-two');
+assert.ok(!restored.cards['racy-old-upload']);
+const withoutActivity = { ...snapshot };
+delete withoutActivity.activity;
+assert.equal((await raceCall('/api/crdt/state/replace', { resetId: 'empty-timeline', snapshot: withoutActivity, expected: restored })).status, 200);
+assert.deepEqual((await cloudState()).activity, {}, 'a snapshot without activity explicitly resets the Timeline to empty');
+console.log('overwrite validation, atomic rollback, concurrent-write detection and stale-device fencing passed');

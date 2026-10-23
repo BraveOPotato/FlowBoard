@@ -43,7 +43,7 @@ function err(msg, status = 400) {
 
 
 // Shared conflict rules keep the server, local edits and remote reads convergent.
-import { applyOp, emptyState, materialize, validId, validOp } from '../src/services/crdt.ts';
+import { SYNC_PROTOCOL, applyOp, emptyState, generationOf, materialize, parseSnapshot, validId, validOp } from '../src/services/crdt.ts';
 
 // Replay ops in ts order onto a state (empty by default)
 function replayOps(ops, state = emptyState()) {
@@ -87,9 +87,9 @@ async function boardTouch(db, keyHash) {
 async function readHistory(db, keyHash) {
   const [snap, log] = await db.batch([
     db.prepare('SELECT snap, snap_ts FROM crdt_snapshots WHERE key_hash = ?').bind(keyHash),
-    db.prepare('SELECT op_id, type, ts, client_id, payload FROM crdt_ops WHERE key_hash = ? ORDER BY ts ASC').bind(keyHash),
+    db.prepare('SELECT rowid, op_id, type, ts, client_id, payload FROM crdt_ops WHERE key_hash = ? ORDER BY ts ASC').bind(keyHash),
   ]);
-  return { snap: snap.results[0], ops: log.results.map(r => ({
+  return { snap: snap.results[0], maxRowId: log.results.reduce((max, r) => Math.max(max, r.rowid), 0), ops: log.results.map(r => ({
     opId: r.op_id, type: r.type, ts: r.ts, clientId: r.client_id, payload: JSON.parse(r.payload),
   })) };
 }
@@ -115,17 +115,22 @@ async function opsCount(db, keyHash) {
 }
 
 // Insert new ops — skip existing opIds (idempotent)
-async function opsInsert(db, keyHash, ops) {
-  if (!ops.length) return;
+const generationSql = `COALESCE((SELECT json_extract(j.value, '$.syncGeneration')
+  FROM crdt_snapshots s, json_each(s.snap, '$.boards') j WHERE s.key_hash = ? AND j.key = ?), '')`;
+
+async function opsInsert(db, keyHash, boardId, ops, generation) {
   const ts = now();
   // D1 batch: up to 100 statements per batch is fine for typical op counts
   const stmts = ops.map(op =>
     db.prepare(
       `INSERT OR IGNORE INTO crdt_ops (op_id, key_hash, type, ts, client_id, payload, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).bind(op.opId, keyHash, op.type, op.ts, op.clientId ?? null, JSON.stringify(op.payload), ts)
+        SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${generationSql} = ?`
+    ).bind(op.opId, keyHash, op.type, op.ts, op.clientId ?? null, JSON.stringify(op.payload), ts, keyHash, boardId, generation)
   );
-  await db.batch(stmts);
+  // The generation check runs inside the insert transaction, not in a racy earlier read.
+  stmts.push(db.prepare(`SELECT ${generationSql} AS generation`).bind(keyHash, boardId));
+  const result = await db.batch(stmts);
+  return result.at(-1).results[0].generation === generation;
 }
 
 // Current map-state (null if the board has no CRDT data): snapshot + replay every stored op.
@@ -184,7 +189,46 @@ async function handleRequest(request, env) {
   if (!validId(boardId) || typeof keyHash !== 'string') return err('boardId and keyHash required');
   if (!/^[0-9a-f]{64}$/.test(keyHash)) return err('Invalid keyHash');
 
+  // Old tabs must not overwrite a recovered board. Their durable outboxes remain
+  // intact on this non-2xx response and can be reviewed after updating the app.
+  if (['/api/crdt/ops/push', '/api/board/put', '/api/crdt/state/replace'].includes(path) && body.protocolVersion !== SYNC_PROTOCOL) {
+    return err('Reload FlowBoard to update before syncing changes.', 409);
+  }
+
   const db = env.flowboard_db;
+
+  // Explicit overwrite: replace the live snapshot and operation history as one transaction.
+  // No schema change is needed; the new generation lives in the board's snapshot record.
+  if (path === '/api/crdt/state/replace') {
+    if (!validId(body.resetId) || !Object.hasOwn(body, 'expected')) return err('Snapshot and expected cloud state required');
+    let state;
+    try { state = parseSnapshot(body.snapshot, boardId); }
+    catch (error) { return err(error.message); }
+    const { snap, ops, maxRowId } = await readHistory(db, keyHash);
+    const current = !snap && !ops.length ? null : replayOps(ops, snap ? JSON.parse(snap.snap) : undefined);
+    if (generationOf(current, boardId) === body.resetId) return json({ ok: true, state: current, protocolVersion: SYNC_PROTOCOL });
+    if (JSON.stringify(current) !== JSON.stringify(body.expected)) return err('The cloud board changed. Export a fresh backup and retry the repair.', 409);
+    const ts = Math.max(now(), (snap?.snap_ts ?? 0) + 1);
+    let i = 0;
+    for (const map of Object.values(state)) for (const row of Object.values(map)) Object.assign(row, { __ts: now(), __opId: `${body.resetId}:${++i}` });
+    Object.assign(state.boards[boardId], { syncProtocol: SYNC_PROTOCOL, syncGeneration: body.resetId });
+    const encoded = JSON.stringify(state);
+    const [written] = await db.batch([
+      db.prepare(`INSERT INTO crdt_snapshots (key_hash, snap, snap_ts, updated_at)
+        SELECT ?, ?, ?, ? WHERE (SELECT snap FROM crdt_snapshots WHERE key_hash = ?) IS ?
+          AND (SELECT snap_ts FROM crdt_snapshots WHERE key_hash = ?) IS ?
+          AND (SELECT COUNT(*) FROM crdt_ops WHERE key_hash = ?) = ?
+          AND COALESCE((SELECT MAX(rowid) FROM crdt_ops WHERE key_hash = ?), 0) = ?
+        ON CONFLICT(key_hash) DO UPDATE SET snap = excluded.snap, snap_ts = excluded.snap_ts, updated_at = excluded.updated_at`
+      ).bind(keyHash, encoded, ts, now(), keyHash, snap?.snap ?? null, keyHash, snap?.snap_ts ?? null, keyHash, ops.length, keyHash, maxRowId),
+      db.prepare(`DELETE FROM crdt_ops WHERE key_hash = ? AND EXISTS
+        (SELECT 1 FROM crdt_snapshots WHERE key_hash = ? AND snap = ? AND snap_ts = ?)`)
+        .bind(keyHash, keyHash, encoded, ts),
+    ]);
+    if (!written.meta.changes) return err('The cloud board changed during repair. Export a fresh backup and retry.', 409);
+    await boardTouch(db, keyHash);
+    return json({ ok: true, state, protocolVersion: SYNC_PROTOCOL });
+  }
 
   // ── GET board ──────────────────────────────────────────
   // `data` is the legacy full-state row (possibly encrypted, and only as fresh as its last
@@ -193,15 +237,21 @@ async function handleRequest(request, env) {
   if (path === '/api/board/get') {
     await boardTouch(db, keyHash);
     const [legacy, mapState] = await Promise.all([boardGet(db, keyHash), buildState(db, keyHash)]);
-    if (!legacy && !mapState) return json({ found: false });
+    if (!legacy && !mapState) return json({ found: false, protocolVersion: SYNC_PROTOCOL });
     const crdt = mapState && materialize(mapState);
-    return json({ found: true, data: legacy ?? crdt, crdt, state: mapState });
+    // An explicit recovery chose the complete shared board. Do not seed unknown
+    // records from an old full-state copy on the next join (they may be deleted).
+    // Keep that legacy row in D1 for backup/recovery, but no longer apply it.
+    const reconciled = mapState?.boards[boardId]?.syncProtocol === SYNC_PROTOCOL;
+    return json({ found: true, data: reconciled ? crdt : legacy ?? crdt, crdt, state: mapState, protocolVersion: SYNC_PROTOCOL });
   }
 
   // ── PUT board ──────────────────────────────────────────
   if (path === '/api/board/put') {
     const { data } = body;
     if (!data) return err('data required');
+    const version = await db.prepare(`SELECT ${generationSql} AS generation`).bind(keyHash, boardId).first();
+    if (version.generation) return err('Legacy writes are disabled after an overwrite repair. Reload FlowBoard.', 409);
     await boardPut(db, keyHash, data);
     return json({ ok: true });
   }
@@ -217,10 +267,13 @@ async function handleRequest(request, env) {
   if (path === '/api/crdt/ops/push') {
     const { ops: incoming } = body;
     if (!Array.isArray(incoming) || incoming.length > 100) return err('ops must be an array of at most 100 operations');
-    if (!incoming.length)         return json({ ok: true, opsAccepted: 0 });
+    const generation = body.generation ?? '';
+    if (generation !== '' && !validId(generation)) return err('Invalid sync generation');
 
     for (const op of incoming) {
       if (!validOp(op, boardId)) return err('Invalid or cross-board operation');
+      if (op.type === 'board.update' && op.payload.syncGeneration !== undefined
+        && (!validId(op.payload.syncGeneration) || op.payload.syncGeneration !== generation)) return err('Invalid board generation');
     }
 
     // Fetch existing opIds for this board to deduplicate
@@ -230,7 +283,7 @@ async function handleRequest(request, env) {
     const existingIds = new Set(existing.map(r => r.op_id));
 
     const newOps = [...new Map(incoming.map(o => [o.opId, o])).values()].filter(o => !existingIds.has(o.opId));
-    await opsInsert(db, keyHash, newOps);
+    if (!await opsInsert(db, keyHash, boardId, newOps, generation)) return err('This board was repaired. Reload FlowBoard and review recovery before uploading older changes.', 409);
     await boardTouch(db, keyHash);
 
     const totalOps    = (existing.length + newOps.length);
@@ -257,7 +310,7 @@ async function handleRequest(request, env) {
   if (path === '/api/crdt/state/get') {
     await boardTouch(db, keyHash);
     const mapState = await buildState(db, keyHash);
-    return json(mapState ? { found: true, data: materialize(mapState), state: mapState } : { found: false });
+    return json(mapState ? { found: true, data: materialize(mapState), state: mapState, protocolVersion: SYNC_PROTOCOL } : { found: false, protocolVersion: SYNC_PROTOCOL });
   }
 
   // ── CRDT force snapshot ────────────────────────────────

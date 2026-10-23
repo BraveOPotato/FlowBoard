@@ -17,6 +17,7 @@ export function Sidebar({ open, hidden, onClose }: { open: boolean; hidden: bool
   const boards = useFlowStore((st) => st.boards);
   const activeBoardId = useFlowStore((st) => st.activeBoardId);
   const workerStatus = useFlowStore((st) => st.workerStatus);
+  const syncPaused = useFlowStore((st) => st.syncRecoveryBoardIds.length > 0);
   const { setActiveBoard, openModal, renameBoard, deleteBoard, toast } = useFlowStore.getState();
   const [renaming, setRenaming] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ anchor: HTMLElement; board: Board } | null>(null);
@@ -105,8 +106,8 @@ export function Sidebar({ open, hidden, onClose }: { open: boolean; hidden: bool
           </button>
           <button className={s.navItem} onClick={go(() => openModal('shortcuts', {}))}><Icon name="help" /> Keyboard shortcuts<kbd className={cx(ui.kbd, s.shortcutKey)}>?</kbd></button>
           <button className={s.sync} onClick={go(() => openModal('settings', {}))} title="Cloud sync status">
-            <span className={cx(s.syncDot, workerStatus && s.online)} />
-            {workerStatus ? 'Cloud sync on' : 'Local only'}
+            <span className={cx(s.syncDot, !syncPaused && workerStatus && s.online)} />
+            {syncPaused ? 'Sync recovery needed' : workerStatus ? 'Cloud sync on' : 'Local only'}
           </button>
         </div>
       </aside>

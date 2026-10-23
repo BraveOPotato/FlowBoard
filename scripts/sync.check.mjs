@@ -20,7 +20,7 @@ const server = await createServer({
     vite.middlewares.use(async (req, res, next) => {
       if (req.url === '/sync-check') {
         res.setHeader('Content-Type', 'text/html');
-        res.end('<!doctype html><html><body>Running sync checks<script>addEventListener("error", e => fetch("/sync-result", {method:"POST", body: JSON.stringify({error:e.message})}));</script><script type="module" src="/src/sync.check.ts"></script></body></html>');
+        res.end(await vite.transformIndexHtml('/sync-check', '<!doctype html><html><body>Running sync checks<script>addEventListener("error", e => fetch("/sync-result", {method:"POST", body: JSON.stringify({error:e.message})}));</script><script type="module" src="/src/sync.check.ts"></script></body></html>'));
       } else if (req.url === '/sync-result') {
         let body = '';
         for await (const part of req) body += part;

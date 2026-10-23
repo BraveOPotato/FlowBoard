@@ -2,9 +2,10 @@ import { create } from 'zustand';
 import { WORKER_URL, COL_COLORS, resolveTheme } from '../constants.ts';
 import { DEFAULT_FILTERS, planMove, uid } from '../utils.ts';
 import { DatabaseService } from '../services/DatabaseService.ts';
+import type { SyncRecovery, SyncWriteOptions } from '../services/DatabaseService.ts';
 import { SyncService } from '../services/SyncService.ts';
 import { CryptoService } from '../services/CryptoService.ts';
-import { applyOp, emptyState, materialize, mergeStates, stripMeta, validId, validOp, type CrdtState } from '../services/crdt.ts';
+import { SYNC_PROTOCOL, applyOp, emptyState, generationOf, materialize, mergeStates, parseSnapshot, stripMeta, validId, validOp, type CrdtState } from '../services/crdt.ts';
 import type {
   FlowState, Board, Column, Card, ActivityEvent, CrdtOp, View,
 } from '../types';
@@ -39,7 +40,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
 
   let writes = Promise.resolve();
   let syncWork = Promise.resolve();
-  const persist = (boardId: string, update: (state: CrdtState) => CrdtOp[]) => {
+  const persist = (boardId: string, update: (state: CrdtState) => CrdtOp[], options?: SyncWriteOptions) => {
     const work = writes.then(async () => {
       const initial = emptyState();
       const current = get();
@@ -50,15 +51,22 @@ export const useFlowStore = create<FlowState>((set, get) => {
           }
         }
       }
-      const state = await db.updateSyncState(boardId, initial, update);
+      const state = await db.updateSyncState(boardId, initial, update, options);
+      const recovery = await db.get<{ value: SyncRecovery }>('settings', `syncRecovery:${boardId}`);
       const data = materialize(state) as unknown as Pick<FlowState, 'boards' | 'columns' | 'cards' | 'activity'>;
       const latest = get();
       set({
+        syncRecoveryBoardIds: [...latest.syncRecoveryBoardIds.filter(id => id !== boardId), ...(recovery && !recovery.value.resolved ? [boardId] : [])],
         boards: [...latest.boards.filter(b => b.id !== boardId), ...data.boards].sort((a, b) => a.createdAt - b.createdAt),
         columns: [...latest.columns.filter(c => c.boardId !== boardId), ...data.columns].sort((a, b) => a.order - b.order),
         cards: [...latest.cards.filter(c => c.boardId !== boardId), ...data.cards].sort((a, b) => a.order - b.order),
         activity: [...latest.activity.filter(a => a.boardId !== boardId), ...data.activity].sort((a, b) => b.ts - a.ts),
       });
+      if (recovery && !recovery.value.resolved && !latest.syncRecoveryBoardIds.includes(boardId)) {
+        get().toast('Cloud sync paused to protect an older board. Review recovery in Settings.', '⚠', {
+          label: 'Review', run: async () => { get().openModal('settings'); },
+        });
+      }
     });
     writes = work.catch(() => {});
     return work;
@@ -67,7 +75,8 @@ export const useFlowStore = create<FlowState>((set, get) => {
     let after = 0;
     for (const map of Object.values(state)) for (const row of Object.values(map)) after = Math.max(after, row.__ts ?? 0);
     return changes.map(({ type, payload }) => {
-      const op = sync.createOp(boardId, type, payload, after);
+      const op = sync.createOp(boardId, type, type === 'board.update' && generationOf(state, boardId)
+        ? { ...payload, syncGeneration: generationOf(state, boardId) } : payload, after);
       if (!validOp(op, boardId)) throw new Error('Invalid local operation');
       after = op.ts;
       applyOp(state, op);
@@ -77,7 +86,16 @@ export const useFlowStore = create<FlowState>((set, get) => {
     const { workerUrl, syncInterval } = get();
     get().saveSettings({ workerUrl, syncInterval }).catch(() => {});
   }));
-  const mergeRemote = (boardId: string, remote: CrdtState) => persist(boardId, state => { mergeStates(state, remote); return []; });
+  const mergeRemote = (boardId: string, remote: CrdtState) => persist(boardId, state => { mergeStates(state, remote); return []; }, { remote: true, remoteState: remote });
+
+  const download = (data: unknown, filename: string) => {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  };
 
   const recordActivity = async (boardId: string, cardId: string, type: ActivityEvent['type'], meta: Partial<ActivityEvent> = {}) => {
     const event: ActivityEvent = { id: uid(), boardId, cardId, type, ts: Date.now(), ...meta };
@@ -122,12 +140,16 @@ export const useFlowStore = create<FlowState>((set, get) => {
     modal: null,
     toasts: [],
     workerStatus: false,
+    syncRecoveryBoardIds: [],
     workerUrl: WORKER_URL,
     syncInterval: 600,
     isLoading: true,
     error: null,
 
     init: async () => {
+      // Best effort: reduce storage eviction without blocking startup or requiring support.
+      try { void navigator.storage?.persist?.().catch(() => {}); }
+      catch { /* Storage permissions must not prevent opening existing boards. */ }
       try {
         await db.open();
         const [boards, columns, cards, settings, activity] = await Promise.all([
@@ -174,6 +196,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
           backlogOpen,
           density,
           isLoading: false,
+          syncRecoveryBoardIds: settings.filter(s => s.key.startsWith('syncRecovery:') && !(s.value as SyncRecovery).resolved).map(s => s.key.slice('syncRecovery:'.length)).filter(id => boards.some(b => b.id === id)),
         });
 
         const creds = await sync.getAllBoardCreds();
@@ -254,7 +277,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
       if (state.activeBoardId === id) {
         await db.put('settings', { key: 'activeBoardId', value: nextActive });
       }
-      set({ boards: nextBoards, columns: nextColumns, cards: nextCards, activeBoardId: nextActive, filters: { ...DEFAULT_FILTERS }, searchQuery: '' });
+      set({ boards: nextBoards, columns: nextColumns, cards: nextCards, activeBoardId: nextActive, syncRecoveryBoardIds: state.syncRecoveryBoardIds.filter(boardId => boardId !== id), filters: { ...DEFAULT_FILTERS }, searchQuery: '' });
     },
 
     createColumn: async (boardId, name) => {
@@ -421,7 +444,10 @@ export const useFlowStore = create<FlowState>((set, get) => {
         sync.stopTimer();
         const creds = await sync.getAllBoardCreds();
         for (const c of creds) {
-          await sync.pullCrdtState(c.boardId, state => get().boards.some(b => b.id === c.boardId) ? mergeRemote(c.boardId, state) : Promise.resolve());
+          if (!get().boards.some(b => b.id === c.boardId)) continue;
+          await persist(c.boardId, () => []);
+          if (await sync.isSyncPaused(c.boardId)) continue;
+          if (!await sync.pullCrdtState(c.boardId, state => get().boards.some(b => b.id === c.boardId) ? mergeRemote(c.boardId, state) : Promise.resolve())) continue;
           await sync.pushCrdtOps(c.boardId);
         }
         sync.startTimer(syncInterval, () => {
@@ -433,6 +459,13 @@ export const useFlowStore = create<FlowState>((set, get) => {
     },
 
     joinBoard: async (boardId, password) => {
+      if (get().boards.some(b => b.id === boardId)) {
+        await persist(boardId, () => []);
+        if (await sync.isSyncPaused(boardId)) {
+          get().openModal('settings');
+          throw new Error('This board is already on this device. Sync is paused to protect its data. Review Sync recovery in Settings before rejoining.');
+        }
+      }
       const keyHash = await CryptoService.hashKey(boardId, password);
       const ok = await sync.pullFromWorker(boardId, password, async (data, remote) => {
         const baseline = parseData(data, boardId);
@@ -450,7 +483,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
             }
           }
           return seeds;
-        });
+        }, { remote: true, remoteState: remote });
       }, keyHash);
       if (!ok) return false;
       // Boards whose server history lost the board record still need a sidebar entry.
@@ -464,14 +497,86 @@ export const useFlowStore = create<FlowState>((set, get) => {
       return true;
     },
 
+    beginSyncRepair: async (boardId) => {
+      if (!get().boards.some(b => b.id === boardId)) throw new Error('Select an existing board to repair.');
+      await persist(boardId, () => [], { pause: true });
+    },
+
+    overwriteImport: async (boardId, json) => {
+      // Validate before pausing or writing anything, including multi-board exports.
+      const snapshot = parseSnapshot(JSON.parse(json), boardId);
+      for (const store of ['columns', 'cards', 'activity'] as const) {
+        if (get()[store].some(row => row.boardId !== boardId && Object.hasOwn(snapshot[store], row.id))) throw new Error('Snapshot record IDs conflict with another board. No data was changed.');
+      }
+      await get().beginSyncRepair(boardId);
+      const remote = await sync.readCrdtState(boardId);
+      const saved = (await db.get<{ value: SyncRecovery }>('settings', `syncRecovery:${boardId}`))!.value;
+      await db.put('settings', { key: `syncRepairBackup:${boardId}:${uid()}`, value: { boardId, ...saved, remote, imported: snapshot } });
+      const replacement = await sync.overwriteBoard(boardId, snapshot, remote);
+      await persist(boardId, () => [], { replaceWith: replacement, resolveWith: remote ?? emptyState() });
+      get().clearFilters();
+      const { workerUrl, syncInterval } = get();
+      await get().saveSettings({ workerUrl, syncInterval });
+    },
+
+    resolveSyncRecovery: async (boardId, source) => {
+      const remote = await sync.readCrdtState(boardId);
+      if (source === 'cloud' && !remote?.boards[boardId]) throw new Error('No complete cloud board is available. Keep this device’s copy or restore a backup.');
+      const saved = await db.get<{ value: CrdtState }>('settings', `crdtState:${boardId}`);
+      if (source === 'cloud' && generationOf(remote, boardId) && generationOf(saved?.value, boardId) !== generationOf(remote, boardId)) {
+        // Accept a reset exactly, without relabelling old pending ops or resurrecting its Timeline.
+        await persist(boardId, () => [], { replaceWith: remote!, resolveWith: remote! });
+        const { workerUrl, syncInterval } = get();
+        await get().saveSettings({ workerUrl, syncInterval });
+        return;
+      }
+      await persist(boardId, state => {
+        const chosen = source === 'local' ? structuredClone(state) : remote!;
+        let after = 0;
+        for (const version of [state, remote ?? emptyState()]) {
+          for (const map of Object.values(version)) for (const row of Object.values(map)) after = Math.max(after, row.__ts ?? 0);
+        }
+        const ops: CrdtOp[] = [];
+        for (const [store, type] of [['boards', 'board.update'], ['columns', 'column.create'], ['cards', 'card.create'], ['activity', 'activity.create']] as const) {
+          // Activity is an audit trail, not a board position: retain both histories.
+          const rows = store === 'activity' ? mergeStates(emptyState(), state).activity : chosen[store];
+          if (store === 'activity') Object.assign(rows, remote?.activity);
+          for (const id of new Set([...Object.keys(state[store]), ...Object.keys(remote?.[store] ?? {})])) {
+            const row = rows[id];
+            const deleted = !row || row.__deleted;
+            if (deleted && (store === 'boards' || store === 'activity')) continue;
+            const op = sync.createOp(boardId, deleted ? `${store === 'cards' ? 'card' : 'column'}.delete` : type,
+              deleted ? { id, boardId } : { ...stripMeta(row), boardId, ...(store === 'boards' ? { syncProtocol: SYNC_PROTOCOL,
+                ...(generationOf(remote, boardId) ? { syncGeneration: generationOf(remote, boardId) } : {}) } : {}) }, after);
+            if (!validOp(op, boardId)) throw new Error('Invalid recovery operation');
+            after = op.ts;
+            applyOp(state, op);
+            ops.push(op);
+          }
+        }
+        return ops;
+      }, { resolveWith: remote ?? emptyState() });
+      const { workerUrl, syncInterval } = get();
+      await get().saveSettings({ workerUrl, syncInterval });
+    },
+
+    exportSyncRecovery: async (boardId) => {
+      const saved = await db.get<{ value: SyncRecovery }>('settings', `syncRecovery:${boardId}`);
+      if (!saved) throw new Error('No recovery backup is available.');
+      // Include the cloud without merging it. A failed read must not prevent exporting the local backup.
+      const remote = await sync.readCrdtState(boardId).catch(() => null);
+      const current = get();
+      const backups = (await db.getAll<{ key: string; value: { boardId?: string } }>('settings'))
+        .filter(s => s.key.startsWith('syncRepairBackup:') && s.value.boardId === boardId).map(s => s.value);
+      download({ boards: current.boards.filter(b => b.id === boardId), columns: current.columns.filter(c => c.boardId === boardId),
+        cards: current.cards.filter(c => c.boardId === boardId), activity: current.activity.filter(a => a.boardId === boardId),
+        recovery: { boardId, ...saved.value, remote: remote ?? saved.value.remote, backups } }, `flowboard-recovery-${boardId}-${Date.now()}.json`);
+    },
+
     exportData: () => {
       const state = get();
       const data = { boards: state.boards, columns: state.columns, cards: state.cards, activity: state.activity };
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = `flowboard-export-${Date.now()}.json`;
-      a.click();
+      download(data, `flowboard-export-${Date.now()}.json`);
     },
 
     importData: async (json) => {
@@ -479,6 +584,8 @@ export const useFlowStore = create<FlowState>((set, get) => {
       const grouped = new Map<string, { type: string; payload: Record<string, unknown> }[]>();
       for (const [store, type] of [['boards', 'board.update'], ['columns', 'column.create'], ['cards', 'card.create'], ['activity', 'activity.create']] as const) {
         for (const row of Object.values(data[store]).map(stripMeta)) {
+          // A regular additive import cannot change a board's repair generation.
+          if (store === 'boards') delete row.syncGeneration;
           const boardId = String(store === 'boards' ? row.id : row.boardId);
           const list = grouped.get(boardId) ?? [];
           list.push({ type, payload: { ...row, boardId } });
