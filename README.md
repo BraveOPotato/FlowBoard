@@ -294,13 +294,15 @@ flowboard/
 
 ## Releasing Updates
 
-Bump the `VERSION` constant in `client/sw.js` before each deployment:
+Bump the `CACHE` constant in `public/sw.js` before each deployment:
 
 ```js
-const VERSION = '1.0.1'; // was 1.0.0
+const CACHE = 'flowboard-v1.2.3';
 ```
 
-This invalidates the service worker cache so all users receive the updated files automatically on their next visit.
+The new worker refreshes the app shell and retains cached, hashed bundles for older open tabs. Update checks bypass the HTTP cache and also run when the app becomes visible or reconnects. An open app shows a **Reload** notification after activation instead of discarding unsaved drafts. A normal online reload loads the new app.
+
+Already-open 1.2.1/1.2.2 clients do not have that notification code: save drafts and reload once after deploying. If an installed app remains stuck, close every FlowBoard window/tab and reopen it online. Do not clear site data: it contains local boards, passwords and pending sync operations.
 
 # React + TypeScript + Vite
 
