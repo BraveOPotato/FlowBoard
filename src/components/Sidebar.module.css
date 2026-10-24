@@ -84,6 +84,7 @@
   font-size: 12.5px;
   font-weight: 500;
   text-align: left;
+  text-decoration: none;
 }
 .active .boardBtn { color: var(--fg); }
 

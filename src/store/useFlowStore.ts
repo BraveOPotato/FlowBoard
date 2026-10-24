@@ -5,6 +5,7 @@ import { DatabaseService } from '../services/DatabaseService.ts';
 import type { SyncRecovery, SyncWriteOptions } from '../services/DatabaseService.ts';
 import { SyncService } from '../services/SyncService.ts';
 import { CryptoService } from '../services/CryptoService.ts';
+import { boardIdFromPath, setBoardUrl } from '../boardRouting.ts';
 import { SYNC_PROTOCOL, applyOp, emptyState, generationOf, materialize, mergeStates, parseSnapshot, stripMeta, validId, validOp, type CrdtState } from '../services/crdt.ts';
 import type {
   FlowState, Board, Column, Card, ActivityEvent, CrdtOp, View,
@@ -177,8 +178,8 @@ export const useFlowStore = create<FlowState>((set, get) => {
         }
 
         const sortedBoards = boards.sort((a, b) => a.createdAt - b.createdAt);
-        if (sortedBoards.length && (!activeBoardId || !sortedBoards.find((b) => b.id === activeBoardId))) {
-          activeBoardId = sortedBoards[0].id;
+        if (!sortedBoards.some((b) => b.id === activeBoardId)) {
+          activeBoardId = sortedBoards[0]?.id ?? null;
         }
 
         activeTheme = applyTheme(activeTheme);
@@ -199,6 +200,8 @@ export const useFlowStore = create<FlowState>((set, get) => {
           syncRecoveryBoardIds: settings.filter(s => s.key.startsWith('syncRecovery:') && !(s.value as SyncRecovery).resolved).map(s => s.key.slice('syncRecovery:'.length)).filter(id => boards.some(b => b.id === id)),
         });
 
+        await get().setActiveBoard(boardIdFromPath(window.location.pathname) ?? activeBoardId, true);
+
         const creds = await sync.getAllBoardCreds();
         if (creds.length) {
           get().saveSettings({ workerUrl, syncInterval }).catch(() => {});
@@ -211,9 +214,18 @@ export const useFlowStore = create<FlowState>((set, get) => {
       }
     },
 
-    setActiveBoard: async (id) => {
-      await db.put('settings', { key: 'activeBoardId', value: id });
+    setActiveBoard: async (id, replace = false) => {
+      if (id && !get().boards.some((b) => b.id === id)) {
+        const boardId = id;
+        get().toast('This board isn’t on this device. Join it with its password.', '⚠', {
+          label: 'Join board', run: async () => { get().openModal('joinInvite', { boardId }); },
+        });
+        id = null;
+        replace = true;
+      }
+      setBoardUrl(id, replace);
       set({ activeBoardId: id, filters: { ...DEFAULT_FILTERS }, searchQuery: '' });
+      await db.put('settings', { key: 'activeBoardId', value: id });
     },
 
     setActiveView: (view: View) => set({ activeView: view }),
@@ -276,6 +288,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
       const nextActive = state.activeBoardId === id ? nextBoards[0]?.id || null : state.activeBoardId;
       if (state.activeBoardId === id) {
         await db.put('settings', { key: 'activeBoardId', value: nextActive });
+        setBoardUrl(nextActive, true);
       }
       set({ boards: nextBoards, columns: nextColumns, cards: nextCards, activeBoardId: nextActive, syncRecoveryBoardIds: state.syncRecoveryBoardIds.filter(boardId => boardId !== id), filters: { ...DEFAULT_FILTERS }, searchQuery: '' });
     },

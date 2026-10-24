@@ -10,6 +10,7 @@ import { BoardView } from './views/BoardView';
 import { CalendarView } from './views/CalendarView';
 import { TimelineView } from './views/TimelineView';
 import { cx } from './utils';
+import { boardIdFromPath } from './boardRouting';
 import s from './App.module.css';
 
 export function App() {
@@ -38,7 +39,18 @@ export function App() {
     catch { /* Keep the toggle usable when browser storage is unavailable. */ }
   }, [filtersOpen]);
 
-  useEffect(() => { useFlowStore.getState().init(); }, []);
+  useEffect(() => {
+    const onPopState = () => {
+      const state = useFlowStore.getState();
+      const boardId = boardIdFromPath(window.location.pathname);
+      if (state.isLoading || boardId === state.activeBoardId) return;
+      void state.setActiveBoard(boardId, true)
+        .catch(() => state.toast('Couldn’t save the selected board.', '⚠'));
+    };
+    window.addEventListener('popstate', onPopState);
+    void useFlowStore.getState().init();
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
 
   if (isLoading) {
     return (

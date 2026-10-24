@@ -6,6 +6,7 @@ import { Menu, MenuItem, MenuSeparator } from './Menu';
 import { InlineInput } from './InlineInput';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import type { Board } from '../types';
+import { boardPath } from '../boardRouting';
 import s from './Sidebar.module.css';
 import ui from './ui.module.css';
 
@@ -26,7 +27,7 @@ export function Sidebar({ open, hidden, onClose }: { open: boolean; hidden: bool
   const go = (fn: () => void) => () => { fn(); onClose(); };
 
   const copyInvite = async (b: Board) => {
-    await navigator.clipboard.writeText(`${location.origin}${location.pathname}?invite=${b.id}`);
+    await navigator.clipboard.writeText(`${location.origin}${boardPath(b.id)}?invite=${encodeURIComponent(b.id)}`);
     toast('Invite link copied. Share it along with the board password.');
   };
 
@@ -70,15 +71,21 @@ export function Sidebar({ open, hidden, onClose }: { open: boolean; hidden: bool
                   />
                 </div>
               ) : (
-                <button
+                <a
                   className={s.boardBtn}
-                  onClick={go(() => setActiveBoard(b.id))}
+                  href={boardPath(b.id)}
+                  onClick={(e) => {
+                    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                    e.preventDefault();
+                    void setActiveBoard(b.id).catch(() => toast('Couldn’t save the selected board.', '⚠'));
+                    onClose();
+                  }}
                   onDoubleClick={() => setRenaming(b.id)}
                   aria-current={b.id === activeBoardId ? 'page' : undefined}
                 >
                   <Avatar board={b} />
                   <span className={s.boardName}>{b.name}</span>
-                </button>
+                </a>
               )}
               <button
                 className={cx(ui.iconBtn, ui.small, s.rowMenuBtn)}

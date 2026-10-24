@@ -8,9 +8,11 @@ import { createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { SettingsModal } from './modals/SettingsModal.tsx';
-import { useFlowStore as settingsStore } from './store/useFlowStore.ts';
+import { useFlowStore as settingsStore, db as settingsDb, sync as settingsSync } from './store/useFlowStore.ts';
 import { BoardView } from './views/BoardView.tsx';
 import { DEFAULT_FILTERS, planMove } from './utils.ts';
+import { App } from './App.tsx';
+import { boardIdFromPath, boardPath, setBoardUrl } from './boardRouting.ts';
 
 const results: string[] = [];
 const assert = (value: unknown, message: string) => { if (!value) throw new Error(message); };
@@ -91,6 +93,7 @@ async function run() {
   const syncA = async () => { await a.useFlowStore.getState().saveSettings({ workerUrl: location.origin, syncInterval: 3600 }); a.sync.stopTimer(); };
   await a.useFlowStore.getState().createBoard('Shared board', 'test-password');
   const boardId = a.useFlowStore.getState().activeBoardId!;
+  equal(location.pathname, boardPath(boardId), 'creating a board navigates to its URL');
   const columnId = a.useFlowStore.getState().columns[0].id;
   await a.useFlowStore.getState().createCard(boardId, columnId, { title: 'Initial' });
   const cardId = a.useFlowStore.getState().cards[0].id;
@@ -101,6 +104,7 @@ async function run() {
   b.sync.setWorkerUrl(location.origin);
   const syncB = async () => { await b.useFlowStore.getState().saveSettings({ workerUrl: location.origin, syncInterval: 3600 }); b.sync.stopTimer(); };
   assert(await b.useFlowStore.getState().joinBoard(boardId, 'test-password'), 'second device joins');
+  equal(location.pathname, boardPath(boardId), 'joining a board navigates to its URL');
   await syncB();
   equal(b.useFlowStore.getState().cards[0].title, 'Initial', 'join downloads initial cards');
   await b.useFlowStore.getState().updateCard(cardId, { title: 'Edited on B' });
@@ -669,6 +673,80 @@ async function run() {
     }
   }
   results.push('Card drops retain the destination during delayed writes, recover on failure, and handle cancel/no-op');
+
+  // Exercise routing through the actual app, IndexedDB, sidebar links and browser history.
+  equal(boardIdFromPath('/board/route_b/'), 'route_b', 'accept a trailing slash');
+  equal(boardIdFromPath(boardPath('space / %')), 'space / %', 'board IDs round-trip through URL encoding');
+  for (const path of ['/', '/board/', '/board/a/extra', '/board/%E0%A4%A']) {
+    equal(boardIdFromPath(path), null, `invalid board path is safe: ${path}`);
+  }
+  client = 'routing';
+  await settingsDb.open();
+  for (const [id, createdAt] of [['route-a', 1], ['route_b', 2]] as const) {
+    await settingsDb.put('boards', { id, name: id, createdAt });
+  }
+  await settingsDb.put('settings', { key: 'activeBoardId', value: 'route-a' });
+  const routingHost = document.createElement('div');
+  document.body.append(routingHost);
+  const routingRoot = createRoot(routingHost);
+  const previousUrl = location.href;
+  try {
+    history.replaceState(null, '', '/board/route_b?source=link#main-content');
+    settingsStore.setState({ isLoading: true, error: null });
+    flushSync(() => routingRoot.render(createElement(App)));
+    for (let i = 0; settingsStore.getState().isLoading && i < 60; i++) await frame();
+    await frame();
+    equal(settingsStore.getState().error, null, 'routing app initializes');
+    equal(settingsStore.getState().activeBoardId, 'route_b', 'direct link wins over the saved selection');
+    equal(routingHost.querySelector('h1')?.textContent, 'route_b', 'direct link renders the right board');
+    const link = routingHost.querySelector<HTMLAnchorElement>('a[href="/board/route-a"]')!;
+    assert(link, 'boards have real links for opening in a new tab');
+    const initialLength = history.length;
+    settingsStore.getState().setSearchQuery('old board filter');
+    link.click();
+    await frame();
+    equal(location.pathname, '/board/route-a', 'sidebar click changes the browser URL');
+    equal(settingsStore.getState().activeBoardId, 'route-a', 'sidebar click selects the board');
+    equal(settingsStore.getState().searchQuery, '', 'navigation clears board filters');
+    equal(location.search + location.hash, '?source=link#main-content', 'navigation preserves query and hash');
+    equal(history.length, initialLength + 1, 'board navigation adds one history entry');
+    link.click();
+    await frame();
+    equal(history.length, initialLength + 1, 'selecting the current board does not duplicate history');
+    for (const [direction, id] of [['back', 'route_b'], ['forward', 'route-a']] as const) {
+      const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }));
+      history[direction]();
+      await popped;
+      await frame();
+      equal(settingsStore.getState().activeBoardId, id, `${direction} restores the board`);
+      equal(routingHost.querySelector('h1')?.textContent, id, `${direction} renders the restored board`);
+    }
+    const beforeDelete = history.length;
+    await settingsStore.getState().deleteBoard('route-a');
+    equal(location.pathname, '/board/route_b', 'deleting the active board routes to the remaining board');
+    equal(history.length, beforeDelete, 'deletion replaces the obsolete URL');
+    history.replaceState(null, '', '/board/missing');
+    await settingsStore.getState().init();
+    equal(settingsStore.getState().activeBoardId, null, 'missing deep link never displays an unrelated board');
+    equal(location.pathname, '/', 'missing board URL falls back safely');
+    const missing = settingsStore.getState().toasts.find(t => t.action?.label === 'Join board')!;
+    assert(missing, 'missing board offers a way to join');
+    await missing.action!.run();
+    equal(settingsStore.getState().modal?.props?.boardId, 'missing', 'join action retains the requested board ID');
+    settingsStore.getState().closeModal();
+    await settingsStore.getState().setActiveBoard('route_b');
+    await settingsStore.getState().deleteBoard('route_b');
+    equal(location.pathname, '/', 'deleting the last board routes home');
+    setBoardUrl(null);
+    equal(location.pathname, '/', 'home navigation is idempotent');
+  } finally {
+    flushSync(() => routingRoot.unmount());
+    routingHost.remove();
+    settingsSync.stopTimer();
+    settingsStore.setState(savedUiState, true);
+    history.replaceState(null, '', previousUrl);
+  }
+  results.push('Board URLs: direct links, sidebar links, creation/join, back/forward, duplicate navigation, deletion and missing boards');
   a.sync.stopTimer(); b.sync.stopTimer(); reloadB.sync.stopTimer();
 }
 

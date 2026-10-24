@@ -125,7 +125,7 @@ export interface FlowState {
   error: string | null;
 
   init: () => Promise<void>;
-  setActiveBoard: (id: string | null) => Promise<void>;
+  setActiveBoard: (id: string | null, replace?: boolean) => Promise<void>;
   setActiveView: (view: View) => void;
   setSearchQuery: (q: string) => void;
   setFilters: (filters: Partial<CardFilters>) => void;
