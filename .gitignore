@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Local board exports and repair output contain private board data
+boards/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
