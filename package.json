@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test": "node src/utils.check.ts && node src/repair.check.ts && node worker/index.check.js",
+    "test": "node src/utils.check.ts && node src/repair.check.ts && node worker/index.check.js && node scripts/sw.check.mjs",
     "test:sync": "node scripts/sync.check.mjs",
     "repair:board": "node scripts/repair-board.mjs",
     "preview": "vite preview",
