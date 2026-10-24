@@ -1,4 +1,4 @@
-const CACHE = 'flowboard-v1.2';
+const CACHE = 'flowboard-v1.2.1';
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 
 self.addEventListener('install', (e) => {
