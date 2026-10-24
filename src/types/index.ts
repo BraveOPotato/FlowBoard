@@ -57,6 +57,7 @@ export interface ActivityEvent {
 export interface BoardCred {
   boardId: ID;
   keyHash: string;
+  password?: string;
   name: string;
   lastSynced: number | null;
 }

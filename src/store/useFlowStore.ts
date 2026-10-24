@@ -261,7 +261,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
       const boardId = uid();
       const keyHash = await CryptoService.hashKey(boardId, password);
       const board: Board = { id: boardId, name: name || 'New Board', createdAt: Date.now() };
-      await sync.saveBoardCreds(boardId, keyHash, board.name);
+      await sync.saveBoardCreds(boardId, keyHash, board.name, password);
       const defaultCols = ['To Do', 'In Progress', 'Done'];
       const newCols = defaultCols.map((colName, i) => ({
         id: uid(), boardId, name: colName, order: i,
@@ -503,7 +503,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
       if (!get().boards.some((b) => b.id === boardId)) {
         await commit(boardId, [{ type: 'board.update', payload: { id: boardId, boardId, name: 'Shared board', createdAt: Date.now() } }]);
       }
-      await sync.saveBoardCreds(boardId, keyHash, get().boards.find(b => b.id === boardId)!.name);
+      await sync.saveBoardCreds(boardId, keyHash, get().boards.find(b => b.id === boardId)!.name, password);
       await get().setActiveBoard(boardId);
       const { workerUrl, syncInterval } = get();
       get().saveSettings({ workerUrl, syncInterval }).catch(() => {});

@@ -51,8 +51,8 @@ export class SyncService {
     return this.db.getAll('boardCreds');
   }
 
-  async saveBoardCreds(boardId: string, keyHash: string, name: string) {
-    await this.db.put('boardCreds', { boardId, keyHash, name, lastSynced: null });
+  async saveBoardCreds(boardId: string, keyHash: string, name: string, password: string) {
+    await this.db.put('boardCreds', { boardId, keyHash, password, name, lastSynced: null });
   }
 
   async isSyncPaused(boardId: string): Promise<boolean> {

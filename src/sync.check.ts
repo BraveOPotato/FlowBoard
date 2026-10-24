@@ -106,6 +106,7 @@ async function run() {
   await a.useFlowStore.getState().createBoard('Shared board', 'test-password');
   const boardId = a.useFlowStore.getState().activeBoardId!;
   equal(location.pathname, boardPath(boardId), 'creating a board navigates to its URL');
+  equal((await a.sync.getBoardCreds(boardId))!.password, 'test-password', 'creating a board saves its password locally');
   const columnId = a.useFlowStore.getState().columns[0].id;
   await a.useFlowStore.getState().createCard(boardId, columnId, { title: 'Initial' });
   const cardId = a.useFlowStore.getState().cards[0].id;
@@ -117,6 +118,7 @@ async function run() {
   const syncB = async () => { await b.useFlowStore.getState().saveSettings({ workerUrl: location.origin, syncInterval: 3600 }); b.sync.stopTimer(); };
   assert(await b.useFlowStore.getState().joinBoard(boardId, 'test-password'), 'second device joins');
   equal(location.pathname, boardPath(boardId), 'joining a board navigates to its URL');
+  equal((await b.sync.getBoardCreds(boardId))!.password, 'test-password', 'joining a board saves its password locally');
   await syncB();
   equal(b.useFlowStore.getState().cards[0].title, 'Initial', 'join downloads initial cards');
   await b.useFlowStore.getState().updateCard(cardId, { title: 'Edited on B' });

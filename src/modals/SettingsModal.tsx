@@ -1,5 +1,5 @@
-import { useId, useRef, useState } from 'react';
-import { useFlowStore } from '../store/useFlowStore';
+import { useEffect, useId, useRef, useState } from 'react';
+import { useFlowStore, sync } from '../store/useFlowStore';
 import { WORKER_URL } from '../constants';
 import { Icon } from '../components/Icon';
 import { cx } from '../utils';
@@ -35,6 +35,12 @@ export function SettingsModal({ inviteId }: { inviteId?: string }) {
   const overwriteFile = useRef<HTMLInputElement>(null);
   const overwriteTarget = useRef('');
   const selectedBoard = boards.find(b => b.id === repairBoardId) ?? boards[0];
+  const [passwords, setPasswords] = useState<Record<string, string | undefined>>({});
+  const [shownPasswords, setShownPasswords] = useState<string[]>([]);
+
+  useEffect(() => {
+    sync.getAllBoardCreds().then(creds => setPasswords(Object.fromEntries(creds.map(c => [c.boardId, c.password])))).catch(() => {});
+  }, []);
 
   const beginRepair = async () => {
     if (!selectedBoard) return;
@@ -138,6 +144,33 @@ export function SettingsModal({ inviteId }: { inviteId?: string }) {
                 {INTERVALS.map((i) => <option key={i.value} value={i.value}>{i.label}</option>)}
               </select>
             </div>
+          </section>
+        )}
+
+        {!inviteId && boards.length > 0 && (
+          <section className={s.section}>
+            <div className={s.sectionHead}>
+              <div>
+                <h3>Board passwords</h3>
+                <p>Saved on this device only, never sent to the worker or included in exports.</p>
+              </div>
+            </div>
+            {boards.map(board => {
+              const password = passwords[board.id];
+              const shown = shownPasswords.includes(board.id);
+              return (
+                <div className={ui.field} key={board.id}>
+                  <label className={ui.label} htmlFor={`board-pw-${board.id}`}>{board.name}</label>
+                  {password === undefined ? <p className={ui.hint}>Not saved on this device. Rejoin the board with its password to save it.</p> : (
+                    <div className={s.passwordRow}>
+                      <input id={`board-pw-${board.id}`} className={ui.input} type={shown ? 'text' : 'password'} value={password} readOnly spellCheck={false} autoComplete="off" />
+                      <button type="button" className={cx(ui.btn, ui.secondary)} aria-pressed={shown} aria-label={`${shown ? 'Hide' : 'Show'} password for ${board.name}`}
+                        onClick={() => setShownPasswords(ids => shown ? ids.filter(id => id !== board.id) : [...ids, board.id])}>{shown ? 'Hide' : 'Show'}</button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </section>
         )}
 

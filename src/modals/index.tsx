@@ -38,7 +38,7 @@ function AddBoardModal() {
       <div className={ui.field}>
         <label className={ui.label} htmlFor="board-pw">Sync password <span style={{ color: 'var(--fg-subtle)', fontWeight: 400 }}>(optional)</span></label>
         <input id="board-pw" className={ui.input} type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="Needed to share or sync across devices" autoComplete="new-password" />
-        <p className={ui.hint}>Passwords can’t be recovered. Keep it somewhere safe.</p>
+        <p className={ui.hint}>Saved on this device and shown in Settings. It can’t be recovered elsewhere, so keep it somewhere safe.</p>
       </div>
     </Modal>
   );
