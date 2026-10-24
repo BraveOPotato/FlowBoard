@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import worker from './index.js';
 import { createDatabase } from './test-db.js';
-import { SYNC_PROTOCOL } from '../src/services/crdt.ts';
+import { SYNC_PROTOCOL, applyOp, emptyState, materialize, mergeStates, settle } from '../src/services/crdt.ts';
 
 const { sql, env } = createDatabase();
 
@@ -35,6 +35,8 @@ await push(op('card.create', Date.now(), { id: 'D', boardId }), op('card.delete'
 await push(op('card.create', Date.now(), { id: 'E', boardId }), op('card.delete', Date.now() + 1, { id: 'E' }));
 // A stale update must not resurrect a newer delete.
 await push(op('card.update', Date.now() - DAY, { id: 'E', boardId }));
+// Nor can a newer edit from a device that never saw the delete: deletes are authoritative.
+await push(op('card.move', Date.now() + DAY, { id: 'E', boardId, columnId: 'col' }));
 
 let j = await join();
 assert.deepEqual(j.boardIds, [boardId], 'board record survives snapshots');
@@ -48,7 +50,8 @@ j = await join();
 assert.deepEqual(j.data, { enc: 1 });
 assert.deepEqual(j.cardIds, ['A', 'B', 'C', 'D']);
 
-await push(op('board.update', Date.now() + 10, { boardId, id: boardId, name: 'Recovered', syncProtocol: SYNC_PROTOCOL }));
+// Boards recovered under protocol 2 stay reconciled after the protocol 3 upgrade.
+await push(op('board.update', Date.now() + 10, { boardId, id: boardId, name: 'Recovered', syncProtocol: 2 }));
 j = await join();
 assert.deepEqual(j.data.cards.map(c => c.id).sort(), j.cardIds, 'recovery prevents a stale legacy baseline from being reapplied');
 assert.deepEqual(JSON.parse(sql.prepare('SELECT data FROM boards WHERE key_hash = ?').get(keyHash).data), { enc: 1 }, 'retain legacy data for backup, not live sync');
@@ -125,7 +128,7 @@ console.log('worker concurrency, rollback, TTL and validation checks passed');
 
 // Cached old clients cannot overwrite a recovered board, through either write API.
 const before = (await (await raceCall('/api/crdt/state/get')).json()).state;
-for (const protocolVersion of [undefined, 1, SYNC_PROTOCOL + 1]) {
+for (const protocolVersion of [undefined, 1, SYNC_PROTOCOL - 1, SYNC_PROTOCOL + 1]) {
   assert.equal((await raceCall('/api/crdt/ops/push', { protocolVersion, ops: [op('card.update', Date.now(), { id: 'tie', boardId, title: 'stale client' })] })).status, 409);
   assert.equal((await raceCall('/api/board/put', { protocolVersion, data: { cards: [] } })).status, 409);
 }
@@ -201,4 +204,44 @@ const withoutActivity = { ...snapshot };
 delete withoutActivity.activity;
 assert.equal((await raceCall('/api/crdt/state/replace', { resetId: 'empty-timeline', snapshot: withoutActivity, expected: restored })).status, 200);
 assert.deepEqual((await cloudState()).activity, {}, 'a snapshot without activity explicitly resets the Timeline to empty');
+const deletedInHistory = { ...snapshot, activity: [{ id: 'future-delete', boardId, cardId: 'restored-card', type: 'deleted', ts: Date.now() + DAY }] };
+assert.equal((await raceCall('/api/crdt/state/replace', { resetId: 'restore-over-history', snapshot: deletedInHistory, expected: await cloudState() })).status, 200);
+assert.deepEqual((await (await raceCall('/api/crdt/state/get')).json()).data.cards.map(c => c.id), ['restored-card'], 'overwrite is an explicit restore, even over its own delete history');
 console.log('overwrite validation, atomic rollback, concurrent-write detection and stale-device fencing passed');
+
+// Existence is decided only by create/delete, so every application order converges.
+const lifeOps = [
+  op('card.create', 10, { id: 'L', boardId, title: 'created' }),
+  op('card.delete', 20, { id: 'L', boardId }),
+  op('card.move', 30, { id: 'L', boardId, title: 'stale move', columnId: 'col' }),
+  op('card.update', 40, { id: 'L', boardId, title: 'stale edit' }),
+];
+const orders = xs => xs.length < 2 ? [xs] : xs.flatMap((x, i) => orders([...xs.slice(0, i), ...xs.slice(i + 1)]).map(rest => [x, ...rest]));
+const fold = ops => settle(ops.reduce((state, o) => (applyOp(state, o), state), emptyState()));
+for (const ops of [lifeOps, [...lifeOps, op('card.create', 50, { id: 'L', boardId, title: 'Undo' })]]) {
+  const expected = fold(ops);
+  for (const order of orders(ops)) assert.deepEqual(fold(order), expected, 'every op order converges');
+  for (let split = 1; split < ops.length; split++) {
+    const [left, right] = [fold(ops.slice(0, split)), fold(ops.slice(split))];
+    assert.deepEqual(settle(mergeStates(structuredClone(left), right)), expected, 'merging partial replicas converges');
+    assert.deepEqual(settle(mergeStates(structuredClone(right), left)), expected, 'merge order does not matter');
+  }
+}
+assert.deepEqual(materialize(fold(lifeOps)).cards, [], 'newer edits cannot resurrect a deleted card');
+assert.equal(materialize(fold([...lifeOps, op('card.create', 50, { id: 'L', boardId, title: 'Undo' })])).cards[0].title, 'Undo', 'an explicit create (Undo) restores');
+
+// Pre-protocol-3 snapshots hold resurrected cards as live rows. The activity log still
+// records the deletion, so the cloud heals itself on the next read without a manual merge.
+const healed = createDatabase();
+const resurrected = emptyState();
+resurrected.boards[boardId] = { id: boardId, name: 'Team', createdAt: 1, __ts: 1, __opId: 'b' };
+resurrected.cards.Z = { id: 'Z', boardId, title: 'Resurrected', __ts: 30, __opId: 'stale-move', __deleted: false };
+resurrected.cards.U = { id: 'U', boardId, title: 'Undone', __ts: 30, __opId: 'undo', __deleted: false };
+for (const [id, cardId, type, ts] of [['z-new', 'Z', 'created', 10], ['z-gone', 'Z', 'deleted', 20], ['u-gone', 'U', 'deleted', 20], ['u-undo', 'U', 'created', 25]]) {
+  resurrected.activity[id] = { id, boardId, cardId, type, ts, __ts: ts, __opId: id };
+}
+healed.sql.prepare('INSERT INTO crdt_snapshots VALUES (?, ?, ?, ?)').run(keyHash, JSON.stringify(resurrected), 1, Date.now());
+const healedCall = async path => (await worker.fetch(new Request(`https://w${path}`, { method: 'POST', body: JSON.stringify({ boardId, keyHash }) }), healed.env)).json();
+assert.deepEqual((await healedCall('/api/crdt/state/get')).data.cards.map(c => c.id), ['U'], 'logged deletes win; a logged Undo still restores');
+assert.deepEqual((await healedCall('/api/board/get')).crdt.cards.map(c => c.id), ['U'], 'rejoining cannot bring the deleted ticket back');
+console.log('authoritative deletes: convergence in every order, explicit Undo, and self-healing of resurrected cards passed');

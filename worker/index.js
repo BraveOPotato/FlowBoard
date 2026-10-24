@@ -43,12 +43,12 @@ function err(msg, status = 400) {
 
 
 // Shared conflict rules keep the server, local edits and remote reads convergent.
-import { SYNC_PROTOCOL, applyOp, emptyState, generationOf, materialize, parseSnapshot, validId, validOp } from '../src/services/crdt.ts';
+import { SYNC_PROTOCOL, applyOp, emptyState, generationOf, materialize, parseSnapshot, settle, validId, validOp } from '../src/services/crdt.ts';
 
 // Replay ops in ts order onto a state (empty by default)
 function replayOps(ops, state = emptyState()) {
   for (const op of [...ops].sort((a, b) => a.ts - b.ts || (a.opId > b.opId ? 1 : -1))) applyOp(state, op);
-  return state;
+  return settle(state);
 }
 
 // ── D1 helpers ────────────────────────────────────────────────────────────────
@@ -209,8 +209,13 @@ async function handleRequest(request, env) {
     if (generationOf(current, boardId) === body.resetId) return json({ ok: true, state: current, protocolVersion: SYNC_PROTOCOL });
     if (JSON.stringify(current) !== JSON.stringify(body.expected)) return err('The cloud board changed. Export a fresh backup and retry the repair.', 409);
     const ts = Math.max(now(), (snap?.snap_ts ?? 0) + 1);
+    // Overwrite is an explicit restore: its rows outrank deletions in their own activity.
+    const stamp = Object.values(state.activity).reduce((max, e) => Math.max(max, e.ts + 1), now());
     let i = 0;
-    for (const map of Object.values(state)) for (const row of Object.values(map)) Object.assign(row, { __ts: now(), __opId: `${body.resetId}:${++i}` });
+    for (const map of Object.values(state)) for (const row of Object.values(map)) {
+      const opId = `${body.resetId}:${++i}`;
+      Object.assign(row, { __ts: stamp, __opId: opId, __lifeTs: stamp, __lifeOpId: opId, __deleted: false });
+    }
     Object.assign(state.boards[boardId], { syncProtocol: SYNC_PROTOCOL, syncGeneration: body.resetId });
     const encoded = JSON.stringify(state);
     const [written] = await db.batch([
@@ -242,7 +247,7 @@ async function handleRequest(request, env) {
     // An explicit recovery chose the complete shared board. Do not seed unknown
     // records from an old full-state copy on the next join (they may be deleted).
     // Keep that legacy row in D1 for backup/recovery, but no longer apply it.
-    const reconciled = mapState?.boards[boardId]?.syncProtocol === SYNC_PROTOCOL;
+    const reconciled = !!mapState?.boards[boardId]?.syncProtocol;
     return json({ found: true, data: reconciled ? crdt : legacy ?? crdt, crdt, state: mapState, protocolVersion: SYNC_PROTOCOL });
   }
 

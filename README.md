@@ -71,7 +71,7 @@ Boards expire after **90 days without reads or writes**. Local data is unaffecte
 
 1. Back up the existing D1 database (Cloudflare D1 export/Time Travel) and export important boards from the app.
 2. Set `database_id` in `worker/wrangler.toml` to the **existing** production D1 ID. Do not replace it with a new empty database. The binding must be `flowboard_db`.
-3. Deploy the worker **before** the frontend. No schema changes are needed for existing D1 deployments.
+3. Deploy the worker **before** the frontend. No schema changes are needed for existing D1 deployments. Sync protocol 3 (authoritative deletes) changes how every device decides whether a record exists, so all clients must run the same version: older clients stop syncing until reloaded.
 4. Deploy the frontend and reload every active client/PWA. The worker rejects writes from older clients with HTTP 409, leaving their pending operations on the device until it is updated. Updated clients also refuse to sync with an older worker.
 5. If **Sync recovery needed** appears, open **Settings → Advanced**. Legacy boards without reliable conflict metadata are backed up in IndexedDB and paused before any cloud merge or upload. Local editing remains available, and the pause survives reloads.
 6. **Export recovery backup** before resolving a paused board. The JSON contains the current board (importable as a regular export), the original local version, and the cloud state if reachable. Compare these with any known-good device/export. **Use this device** explicitly makes its current cards and columns authoritative, deleting cloud-only cards/columns; **Use cloud** explicitly replaces local cards/columns with the fetched cloud version. Neither choice is automatic. Both histories and the pre-resolution local version remain backed up on the device. Do not clear browser storage. Update/close every other client first, and resolve any other paused device using the recovered cloud version rather than publishing its stale local copy.
@@ -102,7 +102,7 @@ npm run repair:board -- current.json repaired.json --baseline good.json
 
 By default, it removes cards with an unambiguous terminal deletion and corrects destinations from the latest usable activity. It keeps ticket descriptions, checklists and other payload fields, retains all activity, and quarantines records whose board no longer exists. Same-title tickets with different IDs remain separate. Contradictory activity, baseline-only records, newer record versions and conflicting full payloads are flagged for review rather than guessed.
 
-For the confirmed resurrection pattern—deleted tickets returning through stale moves/updates—an explicit policy can repair from the corrupted export alone:
+Synced boards no longer need this for resurrected tickets: built-in sync applies the same rule automatically (see **Sync Behaviour**). The tool remains useful for exports, column corrections and auditing. For the resurrection pattern—deleted tickets returning through stale moves/updates—an explicit policy can repair from the corrupted export alone:
 
 ```bash
 npm run repair:board -- current.json repaired-auto.json --deleted-unless-restored
@@ -248,7 +248,9 @@ The board is pulled from D1 and saved locally. Edits trigger a debounced sync; b
 
 The sync interval is configurable in Settings (1 min → 1 hour). Default is **10 minutes**.
 
-Sync is last-write-wins per record (board, column, card or activity event), ordered by operation timestamp with an operation-ID tie-breaker. Concurrent edits to the same card are not field-merged. Deletes retain conflict metadata, and Undo emits a newer operation. Pending local operations survive failed requests and reloads.
+Record contents are last-write-wins (board, column, card or activity event), ordered by operation timestamp with an operation-ID tie-breaker. Concurrent edits to the same card are not field-merged. Pending local operations survive failed requests and reloads.
+
+**Deletes are authoritative.** Whether a card or column exists is decided only by create and delete operations; edits and moves never change it. A stale or offline device that edits a card deleted elsewhere cannot bring it back, regardless of its timestamp. Only an explicit restore—Undo, a recovery choice, or Overwrite import—can. Card deletions recorded in the activity log count as well, so tickets resurrected by earlier versions disappear again on every device and in the cloud after upgrading, with no manual merge. Merging an export with **Import JSON** never restores deleted cards.
 
 ---
 

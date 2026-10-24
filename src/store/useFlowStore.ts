@@ -595,7 +595,8 @@ export const useFlowStore = create<FlowState>((set, get) => {
     importData: async (json) => {
       const data = parseData(JSON.parse(json));
       const grouped = new Map<string, { type: string; payload: Record<string, unknown> }[]>();
-      for (const [store, type] of [['boards', 'board.update'], ['columns', 'column.create'], ['cards', 'card.create'], ['activity', 'activity.create']] as const) {
+      // Merging adds and edits records but never restores deleted ones; Overwrite import does.
+      for (const [store, type] of [['boards', 'board.update'], ['columns', 'column.update'], ['cards', 'card.update'], ['activity', 'activity.create']] as const) {
         for (const row of Object.values(data[store]).map(stripMeta)) {
           // A regular additive import cannot change a board's repair generation.
           if (store === 'boards') delete row.syncGeneration;

@@ -1,5 +1,5 @@
 import { DB_NAME, DB_VERSION } from '../constants.ts';
-import { applyOp, generationOf, mergeStates, type CrdtState } from './crdt.ts';
+import { applyOp, generationOf, mergeStates, settle, type CrdtState } from './crdt.ts';
 import type { CrdtOp, StoreName } from '../types';
 import { uid } from '../utils.ts';
 
@@ -119,6 +119,7 @@ export class DatabaseService {
           next = stored && generationOf(stored, boardId) !== generationOf(initial, boardId)
             ? structuredClone(stored) : stored ? mergeStates(initial, stored) : initial;
           for (const op of pending.result as CrdtOp[]) applyOp(next, op);
+          settle(next);
           let recovery = recoveryRead.result?.value as SyncRecovery | undefined;
           // A missing old-client row is not a tombstone, and an unversioned row is not
           // older than the cloud. Keep an atomic backup and require an explicit choice.
@@ -149,6 +150,7 @@ export class DatabaseService {
             }
           }
           const ops = options.remote && recovery && !recovery.resolved ? [] : update(next);
+          settle(next);
           if (options.resolveWith) tx.objectStore('settings').put({ key: recoveryKey, value: { ...recovery, beforeResolution, remote: options.resolveWith, resolved: true } });
           for (const store of ['boards', 'columns', 'cards', 'activity'] as const) {
             for (const row of Object.values(next[store])) {

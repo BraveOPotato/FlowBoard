@@ -1,7 +1,8 @@
 import type { CrdtOp } from '../types';
 
-export const SYNC_PROTOCOL = 2;
-export type SyncRecord = { id: string; __ts?: number; __opId?: string; __deleted?: boolean; [key: string]: unknown };
+// 3: deletes are authoritative. Every writer must share the same existence rules.
+export const SYNC_PROTOCOL = 3;
+export type SyncRecord = { id: string; __ts?: number; __opId?: string; __deleted?: boolean; __lifeTs?: number; __lifeOpId?: string; [key: string]: unknown };
 export type CrdtState = Record<'boards' | 'columns' | 'cards' | 'activity', Record<string, SyncRecord>>;
 export const emptyState = (): CrdtState => ({ boards: {}, columns: {}, cards: {}, activity: {} });
 export const generationOf = (state: CrdtState | null | undefined, boardId: string): string =>
@@ -23,27 +24,54 @@ export function validOp(op: CrdtOp, boardId: string) {
     && (op.type !== 'board.update' || p.boardId === boardId && (p.id === undefined || p.id === boardId));
 }
 
-// Record-level LWW. An op ID breaks equal-clock ties identically on every device and after GC.
-export const newer = (a: SyncRecord, b?: SyncRecord) => !b || (a.__ts ?? 0) > (b.__ts ?? 0)
-  || (a.__ts ?? 0) === (b.__ts ?? 0) && (a.__opId ?? '') > (b.__opId ?? '');
+type Version = [ts: number, id: string, deleted: boolean];
+// Clock, then op/event ID, then delete over create on an exact tie: identical on every device.
+const later = (a: Version, b: Version) => a[0] !== b[0] ? a[0] > b[0] : a[1] !== b[1] ? a[1] > b[1] : a[2] && !b[2];
+const content = (r: SyncRecord): Version => [r.__ts ?? 0, r.__opId ?? '', false];
+// Rows written before protocol 3 carry no existence version: a tombstone keeps its
+// delete version, and a live row has no recorded create, so any recorded delete wins.
+const lifecycle = (r: SyncRecord): Version => r.__lifeTs !== undefined ? [r.__lifeTs, r.__lifeOpId ?? '', !!r.__deleted]
+  : r.__deleted ? [r.__ts ?? 0, r.__opId ?? '', true] : [0, '', false];
+
+// Fields are last-write-wins. Existence is decided only by create/delete (Undo and
+// recovery emit creates), so a stale or concurrent edit can never resurrect a record.
+function join(local: SyncRecord | undefined, incoming: SyncRecord): SyncRecord {
+  const body = local && !later(content(incoming), content(local)) ? { ...incoming, ...local } : { ...local, ...incoming };
+  const a = lifecycle(incoming), b = local ? lifecycle(local) : a;
+  const [__lifeTs, __lifeOpId, __deleted] = later(a, b) ? a : b;
+  return { ...body, __lifeTs, __lifeOpId, __deleted };
+}
 
 export function applyOp(state: CrdtState, op: CrdtOp) {
   const store = opStore(op.type);
   if (!store) return;
   const id = String(op.type === 'board.update' ? op.payload.boardId : op.payload.id);
-  const existing = Object.hasOwn(state[store], id) ? state[store][id] : undefined;
-  const incoming: SyncRecord = { ...op.payload, id, __ts: op.ts, __opId: op.opId, __deleted: op.type.endsWith('.delete') };
-  if (newer(incoming, existing)) state[store][id] = { ...existing, ...incoming };
+  const action = op.type.slice(op.type.indexOf('.') + 1);
+  const incoming: SyncRecord = { ...stripMeta(op.payload as SyncRecord), id, __ts: op.ts, __opId: op.opId };
+  if (action === 'create' || action === 'delete') Object.assign(incoming, { __lifeTs: op.ts, __lifeOpId: op.opId, __deleted: action === 'delete' });
+  state[store][id] = join(Object.hasOwn(state[store], id) ? state[store][id] : undefined, incoming);
 }
 
 export function mergeStates(local: CrdtState, remote: CrdtState): CrdtState {
   for (const store of Object.keys(local) as (keyof CrdtState)[]) {
     for (const row of Object.values(remote[store])) {
-      const existing = Object.hasOwn(local[store], row.id) ? local[store][row.id] : undefined;
-      if (newer(row, existing)) local[store][row.id] = { ...existing, ...row };
+      local[store][row.id] = join(Object.hasOwn(local[store], row.id) ? local[store][row.id] : undefined, row);
     }
   }
   return local;
+}
+
+// Card deletions are also in the immutable activity log, which survived older sync bugs.
+// Its created/deleted events count as existence evidence, so tickets resurrected by those
+// versions disappear again on every device, while a logged Undo still restores them.
+export function settle(state: CrdtState): CrdtState {
+  for (const event of Object.values(state.activity)) {
+    const card = Object.hasOwn(state.cards, String(event.cardId)) ? state.cards[String(event.cardId)] : undefined;
+    if (!card || card.boardId !== undefined && card.boardId !== event.boardId
+      || event.type !== 'created' && event.type !== 'deleted' || !Number.isSafeInteger(event.ts)) continue;
+    state.cards[card.id] = join(card, { id: card.id, __lifeTs: event.ts as number, __lifeOpId: event.id, __deleted: event.type === 'deleted' });
+  }
+  return state;
 }
 
 export function validState(value: unknown, boardId: string): value is CrdtState {
@@ -53,6 +81,9 @@ export function validState(value: unknown, boardId: string): value is CrdtState 
     return map && typeof map === 'object' && !Array.isArray(map) && Object.entries(map).every(([id, r]) =>
       validId(id) && r && r.id === id && Number.isSafeInteger(r.__ts) && r.__ts! >= 0
       && (r.__opId === undefined || typeof r.__opId === 'string')
+      && (r.__lifeTs === undefined || Number.isSafeInteger(r.__lifeTs) && r.__lifeTs >= 0)
+      && (r.__lifeOpId === undefined || typeof r.__lifeOpId === 'string')
+      && (r.__deleted === undefined || typeof r.__deleted === 'boolean')
       && (store === 'boards' ? id === boardId && (r.syncGeneration === undefined || validId(r.syncGeneration))
         : r.boardId === boardId || r.__deleted && r.boardId === undefined));
   });
@@ -83,7 +114,7 @@ export function parseSnapshot(data: unknown, boardId: string): CrdtState {
         || row.checklist !== undefined && (!Array.isArray(row.checklist) || !row.checklist.every(c => c && validId(c.id) && typeof c.title === 'string' && typeof c.done === 'boolean')))) {
         throw new Error('Invalid snapshot card.');
       }
-      if (store === 'activity' && (!validId(row.cardId) || !number(row.ts)
+      if (store === 'activity' && (!validId(row.cardId) || !Number.isSafeInteger(row.ts) || (row.ts as number) < 0
         || !['created', 'moved', 'updated', 'deleted', 'due_set'].includes(String(row.type)))) throw new Error('Invalid snapshot activity.');
       const fields = stripMeta(row);
       delete fields.syncGeneration;
@@ -110,5 +141,7 @@ export function stripMeta(record: SyncRecord) {
   delete row.__ts;
   delete row.__opId;
   delete row.__deleted;
+  delete row.__lifeTs;
+  delete row.__lifeOpId;
   return row;
 }

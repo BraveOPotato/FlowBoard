@@ -43,6 +43,18 @@ async function run() {
   const tombstone = await reloaded.get<{ value: CrdtState }>('settings', 'crdtState:board');
   assert(tombstone!.value.cards.card.__deleted, 'persist tombstones');
   equal(await reloaded.get('cards', 'card'), undefined, 'remove deleted card from live storage');
+  applyOp(state, op('card.move', 60, 'newer stale move'));
+  equal(materialize(state).cards.length, 1, 'Undo remains restored after a later edit');
+  applyOp(state, op('card.delete', 70));
+  applyOp(state, op('card.move', 80, 'newer edit from a device that missed the delete'));
+  equal(materialize(state).cards.length, 0, 'deletes are authoritative over newer edits');
+  // A card resurrected by an older version heals locally from its logged deletion.
+  await reloaded.updateSyncState('healed', emptyState(), local => {
+    local.cards.zombie = { id: 'zombie', boardId: 'healed', title: 'Resurrected', __ts: 30, __opId: 'stale-move' };
+    local.activity.gone = { id: 'gone', boardId: 'healed', cardId: 'zombie', type: 'deleted', ts: 20, __ts: 20, __opId: 'gone' };
+    return [];
+  });
+  equal(await reloaded.get('cards', 'zombie'), undefined, 'logged deletion removes a resurrected card from live storage');
   results.push('Persistent timestamps, tombstones, stale updates/deletes and Undo');
 
   // IDB transactions serialize multiple open database connections and roll back on failure.
@@ -128,10 +140,20 @@ async function run() {
   assert(a.useFlowStore.getState().cards.some(c => c.id === offline.id), 'recover an offline op after it has been pruned');
   results.push('Late offline arrivals and snapshot recovery ignore old timestamp cursors');
 
+  const pick = (st: ReturnType<typeof a.useFlowStore.getState>) => ({ boards: st.boards.filter(x => x.id === boardId),
+    columns: st.columns.filter(c => c.boardId === boardId), cards: st.cards.filter(c => c.boardId === boardId), activity: [] });
+  const exportBeforeDelete = JSON.stringify(pick(a.useFlowStore.getState()));
   await a.useFlowStore.getState().deleteCard(cardId);
   await syncA();
   await syncB();
   assert(!b.useFlowStore.getState().cards.some(c => c.id === cardId), 'deletion reaches B');
+  await call('/api/crdt/ops/push', { ops: [{ ...op('card.move', Date.now() + 60000), boardId, payload: { ...offline, id: cardId, title: 'newer stale move' } }] });
+  await syncB();
+  assert(!b.useFlowStore.getState().cards.some(c => c.id === cardId), 'a newer move from a stale device must not resurrect on B');
+  await a.useFlowStore.getState().importData(exportBeforeDelete);
+  a.sync.stopTimer();
+  assert(!a.useFlowStore.getState().cards.some(c => c.id === cardId), 'merging an older export must not restore a deleted card');
+  await syncA();
   const deletion = (await a.db.get<{ value: CrdtState }>('settings', `crdtState:${boardId}`))!.value.cards[cardId].__ts!;
   await call('/api/crdt/ops/push', { ops: [{ ...op('card.update', deletion - 1), boardId, payload: { ...offline, id: cardId, title: 'stale resurrection' } }] });
   await syncB();

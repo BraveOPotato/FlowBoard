@@ -192,7 +192,7 @@ export function SettingsModal({ inviteId }: { inviteId?: string }) {
           <div className={s.sectionHead}>
             <div>
               <h3>Backup</h3>
-              <p>Export everything to a JSON file, or merge in a previous export.</p>
+              <p>Export everything to a JSON file, or merge in a previous export. Merging never restores deleted cards.</p>
             </div>
           </div>
           <div className={s.actions}>
