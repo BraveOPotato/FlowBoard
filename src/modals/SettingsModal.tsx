@@ -15,7 +15,7 @@ const INTERVALS = [
   { value: 1800, label: 'Every 30 minutes' },
   { value: 3600, label: 'Every hour' },
 ];
-const TABS = ['General', 'Backup', 'Advanced'] as const;
+const TABS = ['General', 'Boards', 'Backup', 'Advanced'] as const;
 
 export function SettingsModal({ inviteId }: { inviteId?: string }) {
   const workerStatus = useFlowStore((st) => st.workerStatus);
@@ -123,9 +123,8 @@ export function SettingsModal({ inviteId }: { inviteId?: string }) {
           ))}
         </nav>
       )}
-      <div role={inviteId ? undefined : 'tabpanel'} id={inviteId ? undefined : `${settingsId}-panel-General`}
-        aria-labelledby={inviteId ? undefined : `${settingsId}-tab-General`} hidden={!inviteId && tab !== 'General'}>
-        {!inviteId && (
+      {!inviteId && (
+        <div role="tabpanel" id={`${settingsId}-panel-General`} aria-labelledby={`${settingsId}-tab-General`} hidden={tab !== 'General'}>
           <section className={s.section}>
             <div className={s.sectionHead}>
               <div>
@@ -145,8 +144,27 @@ export function SettingsModal({ inviteId }: { inviteId?: string }) {
               </select>
             </div>
           </section>
-        )}
+          <section className={s.section}>
+            <div className={s.sectionHead}>
+              <div>
+                <h3>Contact us</h3>
+                <p>Have a question, found a bug, or want to suggest a feature?</p>
+              </div>
+            </div>
+            <div className={s.actions}>
+              <a className={cx(ui.btn, ui.secondary)} href="mailto:abdullah@alkhafaji.dev">
+                Contact via email
+              </a>
+              <a className={cx(ui.btn, ui.secondary)} href="https://github.com/BraveOPotato/FlowBoard/issues/new" target="_blank" rel="noopener noreferrer">
+                <Icon name="link" size={15} /> Contact via GitHub
+              </a>
+            </div>
+          </section>
+        </div>
+      )}
 
+      <div role={inviteId ? undefined : 'tabpanel'} id={inviteId ? undefined : `${settingsId}-panel-Boards`}
+        aria-labelledby={inviteId ? undefined : `${settingsId}-tab-Boards`} hidden={!inviteId && tab !== 'Boards'}>
         {!inviteId && boards.length > 0 && (
           <section className={s.section}>
             <div className={s.sectionHead}>
@@ -199,25 +217,6 @@ export function SettingsModal({ inviteId }: { inviteId?: string }) {
             </button>
           </div>
         </section>
-
-        {!inviteId && (
-          <section className={s.section}>
-            <div className={s.sectionHead}>
-              <div>
-                <h3>Contact us</h3>
-                <p>Have a question, found a bug, or want to suggest a feature?</p>
-              </div>
-            </div>
-            <div className={s.actions}>
-              <a className={cx(ui.btn, ui.secondary)} href="mailto:abdullah@alkhafaji.dev">
-                Contact via email
-              </a>
-              <a className={cx(ui.btn, ui.secondary)} href="https://github.com/BraveOPotato/FlowBoard/issues/new" target="_blank" rel="noopener noreferrer">
-                <Icon name="link" size={15} /> Contact via GitHub
-              </a>
-            </div>
-          </section>
-        )}
       </div>
 
       {!inviteId && (

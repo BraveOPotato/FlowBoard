@@ -205,7 +205,7 @@ Redeploy or re-serve the client after saving.
 When you click **+ New Board**, you'll be prompted for:
 
 - **Board name**
-- **Sync password** — optional, but set one if you plan to share the board. It derives the D1 access key. It's saved on this device (see **Settings → Board passwords**) but cannot be recovered anywhere else. Use a strong, unique password.
+- **Sync password** — optional, but set one if you plan to share the board. It derives the D1 access key. It's saved on this device (see **Settings → Boards**) but cannot be recovered anywhere else. Use a strong, unique password.
 - **Confirm password**
 
 FlowBoard creates the board locally and schedules a debounced operation push to D1.
@@ -230,7 +230,7 @@ The board is pulled from D1 and saved locally. Edits trigger a debounced sync; b
 
 ## Joining a Board Manually
 
-1. Open **⚙ Settings → Join a Board**
+1. Open **⚙ Settings → Boards**
 2. Enter the **Board ID** (from the board creator)
 3. Enter the **Password**
 4. Click **Join Board**
@@ -257,7 +257,7 @@ Record contents are last-write-wins (board, column, card or activity event), ord
 ## Security Model
 
 - Passwords never leave the browser in plain text
-- Each board's password is saved in this browser's IndexedDB so it can be shown under **Settings → Board passwords**. Anyone with access to this browser profile can read it. It is never sent to the worker or included in exports
+- Each board's password is saved in this browser's IndexedDB so it can be shown under **Settings → Boards**. Anyone with access to this browser profile can read it. It is never sent to the worker or included in exports
 - The access key is `SHA-256(boardId:password)`, a 64-character hex string
 - Use HTTPS and strong passwords; weak passwords can be guessed offline if an access hash leaks
 - Board IDs in invite links do not grant access on their own — the password is always required

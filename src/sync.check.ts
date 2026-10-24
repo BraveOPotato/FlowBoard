@@ -537,7 +537,7 @@ async function run() {
   try {
     flushSync(() => repairRoot.render(createElement(SettingsModal)));
     const tabs = [...repairHost.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
-    equal(tabs.map(t => t.textContent), ['General', 'Backup', 'Advanced'], 'settings are split into three named tabs');
+    equal(tabs.map(t => t.textContent), ['General', 'Boards', 'Backup', 'Advanced'], 'settings are split into four named tabs');
     const tab = (name: string) => tabs.find(t => t.textContent === name)!;
     const panel = (name: string) => document.getElementById(tab(name).getAttribute('aria-controls')!)!;
     const selectTab = (name: string) => flushSync(() => tab(name).click());
@@ -548,6 +548,7 @@ async function run() {
     const workerField = repairHost.querySelector<HTMLInputElement>('#worker-url')!;
     const joinField = repairHost.querySelector<HTMLInputElement>('#join-id')!;
     const joinPassword = repairHost.querySelector<HTMLInputElement>('#join-pw')!;
+    assert(panel('General').contains(workerField) && panel('Boards').contains(joinField) && !panel('General').contains(joinField), 'sync settings stay in General; joining moves to Boards');
     flushSync(() => {
       for (const [field, value] of [[workerField, ' https://worker.example.test '], [joinField, 'draft-board-id'], [joinPassword, 'draft-test-password']] as const) {
         Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, value);
