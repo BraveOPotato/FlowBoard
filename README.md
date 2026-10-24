@@ -92,6 +92,26 @@ After an explicit recovery, the chosen versioned board becomes authoritative for
 
 Deploy the updated worker before the frontend. This repair endpoint uses the existing D1 schema; no database recreation or migration is required.
 
+### Offline repair from exported activity
+
+The offline tool creates a repaired JSON snapshot and a separate `.report.json` audit file. It does not change its inputs or contact the worker. It works with one corrupted export, or can merge a known-good baseline by record ID:
+
+```bash
+npm run repair:board -- current.json repaired.json --baseline good.json
+```
+
+By default, it removes cards with an unambiguous terminal deletion and corrects destinations from the latest usable activity. It keeps ticket descriptions, checklists and other payload fields, retains all activity, and quarantines records whose board no longer exists. Same-title tickets with different IDs remain separate. Contradictory activity, baseline-only records, newer record versions and conflicting full payloads are flagged for review rather than guessed.
+
+For the confirmed resurrection pattern—deleted tickets returning through stale moves/updates—an explicit policy can repair from the corrupted export alone:
+
+```bash
+npm run repair:board -- current.json repaired-auto.json --deleted-unless-restored
+```
+
+This policy treats deletion as effective until a later explicit `created`/Undo event. It still flags newer record metadata and equal-time conflicts. Use it only when this matches the intended board state; an unlogged intentional restore/import cannot be distinguished from corruption. Individual `--keep CARD_ID` and `--delete CARD_ID` decisions override the policy. The report records decisions, event IDs, quarantined records and input/output SHA-256 hashes. Existing output files are never overwritten.
+
+Review the report, then apply the candidate through **Settings → Advanced → Overwrite import**, not the additive importer. Activity is not a complete operation log: it cannot recreate missing descriptions/checklists or the exact historical drag order. Within affected columns, the tool keeps the relative order of existing cards and appends repaired arrivals in event order. An export timestamp is not a sync watermark, and absence from an older snapshot alone is not evidence of deletion. This is intentionally an offline review tool, not a silent background repair.
+
 ### Prerequisites
 
 - A [Cloudflare account](https://dash.cloudflare.com/sign-up) (free tier is sufficient)
