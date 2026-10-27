@@ -1,4 +1,4 @@
-const CACHE = 'flowboard-v1.2.3';
+const CACHE = 'flowboard-v1.2.4';
 // ponytail: retain immutable bundles for older open tabs; add client-aware pruning if storage grows too large.
 const ASSETS = 'flowboard-assets';
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];

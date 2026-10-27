@@ -59,6 +59,7 @@ body {
 }
 
 button, input, select, textarea { font: inherit; color: inherit; }
+select option { background: var(--raised); color: var(--fg); }
 button { cursor: pointer; }
 button:active:not(:disabled) { transform: translateY(1px); }
 button:disabled { cursor: default; }
