@@ -1,8 +1,8 @@
 import { WORKER_URL } from '../constants.ts';
 import { uid } from '../utils.ts';
 import { CryptoService } from './CryptoService.ts';
-import { SYNC_PROTOCOL, generationOf, materialize, validState, type CrdtState } from './crdt.ts';
-import type { DatabaseService, SyncRecovery } from './DatabaseService';
+import { SYNC_PROTOCOL, validState, type CrdtState } from './crdt.ts';
+import type { DatabaseService } from './DatabaseService';
 import type { BoardCred, CrdtOp, FlowState } from '../types';
 
 export class SyncService {
@@ -55,12 +55,6 @@ export class SyncService {
     await this.db.put('boardCreds', { boardId, keyHash, password, name, lastSynced: null });
   }
 
-  async isSyncPaused(boardId: string): Promise<boolean> {
-    const recovery = await this.db.get<{ value: SyncRecovery }>('settings', `syncRecovery:${boardId}`);
-    if (recovery) return !recovery.value.resolved;
-    return !(await this.db.get('settings', `crdtState:${boardId}`)) && !!(await this.db.get('boards', boardId));
-  }
-
   createOp(boardId: string, type: string, payload: Record<string, unknown>, after: number): CrdtOp {
     this.lastIssued = Math.max(Date.now(), this.lastIssued + 1, after + 1);
     return {
@@ -74,7 +68,6 @@ export class SyncService {
   }
 
   async pushToWorker(boardId: string, state: Pick<FlowState, 'boards' | 'columns' | 'cards' | 'activity'>, password: string): Promise<boolean> {
-    if (await this.isSyncPaused(boardId)) return false;
     const creds = await this.getBoardCreds(boardId);
     if (!creds) return false;
     const plainData = {
@@ -127,7 +120,6 @@ export class SyncService {
   }
 
   async pushCrdtOps(boardId: string): Promise<boolean> {
-    if (await this.isSyncPaused(boardId)) return false;
     const creds = await this.getBoardCreds(boardId);
     if (!creds) return false;
     const { generation, ops: pending } = await this.db.getSyncOutbox(boardId);
@@ -159,21 +151,6 @@ export class SyncService {
     if (!found) return null;
     if (!validState(state, boardId)) throw new Error('Invalid sync state; upgrade the worker first');
     return state;
-  }
-
-  async overwriteBoard(boardId: string, snapshot: CrdtState, expected: CrdtState | null): Promise<CrdtState> {
-    if (!await this.isSyncPaused(boardId)) throw new Error('Pause this board for repair before overwriting it.');
-    const creds = await this.getBoardCreds(boardId);
-    if (!creds) throw new Error('Missing board credentials. Join the board before repairing it.');
-    const resetId = uid();
-    const r = await this.fetchJson('/api/crdt/state/replace', { boardId, keyHash: creds.keyHash, resetId, expected,
-      snapshot: materialize(snapshot), protocolVersion: SYNC_PROTOCOL });
-    const reply = await r.json().catch(() => null);
-    if (!r.ok) throw new Error(r.status === 413 ? 'The snapshot and expected cloud state exceed the worker’s 1 MB request limit.'
-      : reply?.error ?? 'Overwrite could not be confirmed. Upgrade the worker and retry; this board remains paused.');
-    if (reply?.ok !== true || reply.protocolVersion !== SYNC_PROTOCOL || !validState(reply.state, boardId)
-      || generationOf(reply.state, boardId) !== resetId) throw new Error('Invalid overwrite response. This board remains paused; check the worker before retrying.');
-    return reply.state;
   }
 
   async pullCrdtState(boardId: string, mergeCallback: (state: CrdtState) => Promise<void>): Promise<boolean> {

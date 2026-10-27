@@ -1,10 +1,6 @@
 import { DB_NAME, DB_VERSION } from '../constants.ts';
 import { applyOp, generationOf, mergeStates, settle, type CrdtState } from './crdt.ts';
 import type { CrdtOp, StoreName } from '../types';
-import { uid } from '../utils.ts';
-
-export type SyncRecovery = { local: CrdtState; beforeResolution?: CrdtState; remote?: CrdtState; pending?: CrdtOp[]; resolved?: boolean };
-export type SyncWriteOptions = { remote?: boolean; remoteState?: CrdtState; resolveWith?: CrdtState; pause?: boolean; replaceWith?: CrdtState };
 
 export class DatabaseService {
   private db: IDBDatabase | null = null;
@@ -87,7 +83,7 @@ export class DatabaseService {
     });
   }
 
-  // Read the generation and outbox together: another tab can reset both atomically.
+  // Read the history identifier and pending operations from one consistent transaction.
   getSyncOutbox(boardId: string): Promise<{ generation: string; ops: CrdtOp[] }> {
     return new Promise((resolve, reject) => {
       if (!this.db) return reject(new Error('DB not open'));
@@ -101,14 +97,12 @@ export class DatabaseService {
 
   // Native IDB transaction serializes concurrent tabs and commits records, versions, tombstones
   // and the outbox together. Never acknowledge a remote read before this transaction completes.
-  updateSyncState(boardId: string, initial: CrdtState, update: (state: CrdtState) => CrdtOp[], options: SyncWriteOptions = {}): Promise<CrdtState> {
+  updateSyncState(boardId: string, initial: CrdtState, update: (state: CrdtState) => CrdtOp[], remote?: CrdtState): Promise<CrdtState> {
     return new Promise((resolve, reject) => {
       if (!this.db) return reject(new Error('DB not open'));
       const tx = this.db.transaction(['settings', 'boards', 'columns', 'cards', 'activity', 'crdtOps'], 'readwrite');
       const key = `crdtState:${boardId}`;
       const read = tx.objectStore('settings').get(key);
-      const recoveryKey = `syncRecovery:${boardId}`;
-      const recoveryRead = tx.objectStore('settings').get(recoveryKey);
       const pending = tx.objectStore('crdtOps').index('boardId').getAll(boardId);
       let next: CrdtState;
       // Requests execute in order; include the durable outbox when upgrading an old client.
@@ -120,38 +114,12 @@ export class DatabaseService {
             ? structuredClone(stored) : stored ? mergeStates(initial, stored) : initial;
           for (const op of pending.result as CrdtOp[]) applyOp(next, op);
           settle(next);
-          let recovery = recoveryRead.result?.value as SyncRecovery | undefined;
-          // A missing old-client row is not a tombstone, and an unversioned row is not
-          // older than the cloud. Keep an atomic backup and require an explicit choice.
-          const legacy = read.result
-            ? Object.values(read.result.value as CrdtState).some(map => Object.values(map).some(row => !row.__opId && !row.__ts))
-            : !!initial.boards[boardId];
-          const reset = !!next.boards[boardId] && !!options.remoteState
-            && generationOf(next, boardId) !== generationOf(options.remoteState, boardId);
-          if (options.pause || options.replaceWith || reset) {
-            tx.objectStore('settings').put({ key: `syncRepairBackup:${boardId}:${uid()}`,
-              value: { boardId, local: structuredClone(next), pending: pending.result, remote: options.resolveWith ?? options.remoteState } });
+          // Keep histories reset by older releases isolated without discarding local work.
+          if (next.boards[boardId] && remote && generationOf(next, boardId) !== generationOf(remote, boardId)) {
+            throw new Error('This device has a different board history. Export its local data before joining the cloud board in a new browser profile.');
           }
-          if (options.pause || reset || !recovery && legacy) {
-            recovery = { ...recovery, local: recovery?.local ?? structuredClone(next), pending: pending.result, resolved: false,
-              ...(reset ? { remote: options.remoteState } : {}) };
-            tx.objectStore('settings').put({ key: recoveryKey, value: recovery });
-          }
-          if (options.resolveWith && (!recovery || recovery.resolved)) throw new Error('This board no longer needs sync recovery.');
-          const beforeResolution = options.resolveWith ? structuredClone(next) : undefined;
-          if (options.replaceWith) {
-            next = structuredClone(options.replaceWith);
-            for (const op of pending.result as CrdtOp[]) tx.objectStore('crdtOps').delete(op.opId);
-            tx.objectStore('settings').delete(`crdtMeta:${boardId}`);
-            for (const store of ['columns', 'cards', 'activity'] as const) {
-              const os = tx.objectStore(store);
-              const keys = os.index('boardId').getAllKeys(boardId);
-              keys.onsuccess = () => { for (const id of keys.result) if (!Object.hasOwn(next[store], String(id))) os.delete(id); };
-            }
-          }
-          const ops = options.remote && recovery && !recovery.resolved ? [] : update(next);
+          const ops = update(next);
           settle(next);
-          if (options.resolveWith) tx.objectStore('settings').put({ key: recoveryKey, value: { ...recovery, beforeResolution, remote: options.resolveWith, resolved: true } });
           for (const store of ['boards', 'columns', 'cards', 'activity'] as const) {
             for (const row of Object.values(next[store])) {
               const os = tx.objectStore(store);

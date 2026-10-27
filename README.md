@@ -73,44 +73,11 @@ Boards expire after **90 days without reads or writes**. Local data is unaffecte
 2. Set `database_id` in `worker/wrangler.toml` to the **existing** production D1 ID. Do not replace it with a new empty database. The binding must be `flowboard_db`.
 3. Deploy the worker **before** the frontend. No schema changes are needed for existing D1 deployments. Sync protocol 3 (authoritative deletes) changes how every device decides whether a record exists, so all clients must run the same version: older clients stop syncing until reloaded.
 4. Deploy the frontend and reload every active client/PWA. The worker rejects writes from older clients with HTTP 409, leaving their pending operations on the device until it is updated. Updated clients also refuse to sync with an older worker.
-5. If **Sync recovery needed** appears, open **Settings → Advanced**. Legacy boards without reliable conflict metadata are backed up in IndexedDB and paused before any cloud merge or upload. Local editing remains available, and the pause survives reloads.
-6. **Export recovery backup** before resolving a paused board. The JSON contains the current board (importable as a regular export), the original local version, and the cloud state if reachable. Compare these with any known-good device/export. **Use this device** explicitly makes its current cards and columns authoritative, deleting cloud-only cards/columns; **Use cloud** explicitly replaces local cards/columns with the fetched cloud version. Neither choice is automatic. Both histories and the pre-resolution local version remain backed up on the device. Do not clear browser storage. Update/close every other client first, and resolve any other paused device using the recovered cloud version rather than publishing its stale local copy.
-7. Smoke-test joining, editing from two devices, deletion/Undo, and an offline edit followed by reconnecting. Historical data already lost by the old GC or an earlier upgrade must be restored from a backup; these fixes cannot recreate it.
+5. Smoke-test joining, editing from two devices, deletion/Undo, and an offline edit followed by reconnecting. Historical data already lost by the old GC or an earlier upgrade cannot be recreated from sync history alone.
 
-The worker keeps legacy data readable, but both write endpoints require the current sync protocol. New clients use versioned state reads, including tombstones, so they can recover after operation-log pruning. Snapshots and pruning commit atomically with compare-and-swap protection against concurrent snapshots. Client records, conflict versions, pending operations and recovery decisions commit in one IndexedDB transaction.
+The worker keeps legacy data readable, but both write endpoints require the current sync protocol. New clients use versioned state reads, including tombstones, so they can catch up after operation-log pruning. Snapshots and pruning commit atomically with compare-and-swap protection against concurrent snapshots. Client records, conflict versions and pending operations commit in one IndexedDB transaction.
 
-After an explicit recovery, the chosen versioned board becomes authoritative for new joins. Stale full-state rows remain in D1 for backup purposes but are not reapplied to the recovered board.
-
-### Repairing an already-upgraded or rejoined board
-
-1. Open **Settings → Advanced**, select the affected board, and click **Repair this board**. This saves a local recovery backup and pauses only that board, even when its sync metadata looks valid.
-2. Export the recovery backup. Compare it with a known-good device or JSON export before choosing **Use this device**, **Use cloud**, or **Overwrite import**.
-3. **Overwrite import** accepts a FlowBoard JSON export containing the selected board's exact ID (including a multi-board export or the normal board portion of a recovery export). Only that board is replaced. Cards, columns, and Timeline activity become exactly the snapshot; missing activity means an empty Timeline. This is not the additive **Import JSON** action.
-4. After validation and explicit confirmation, overwrite replaces the cloud snapshot and removes its old live operation log in one transaction. A new board generation rejects pre-repair uploads, including from clients running the same protocol version. If the cloud changes during repair, the overwrite is rejected rather than erasing concurrent work. The complete request, including the expected cloud state, must fit the worker's 1 MB limit.
-5. Previous local data, pending operations, and the fetched cloud state remain in separate IndexedDB recovery backups, included in **Export recovery backup**. A failed or unconfirmed overwrite leaves the board paused. Do not clear browser storage. If the cloud replacement succeeded but the local commit failed, **Use cloud** adopts the repaired board.
-6. Update/reload other devices. They pause on a changed generation; **Use cloud** adopts the replacement exactly, including its Timeline, while archiving the superseded local outbox. Do not publish stale device copies unless you explicitly intend to replace the repaired board again.
-
-Deploy the updated worker before the frontend. This repair endpoint uses the existing D1 schema; no database recreation or migration is required.
-
-### Offline repair from exported activity
-
-The offline tool creates a repaired JSON snapshot and a separate `.report.json` audit file. It does not change its inputs or contact the worker. It works with one corrupted export, or can merge a known-good baseline by record ID:
-
-```bash
-npm run repair:board -- current.json repaired.json --baseline good.json
-```
-
-By default, it removes cards with an unambiguous terminal deletion and corrects destinations from the latest usable activity. It keeps ticket descriptions, checklists and other payload fields, retains all activity, and quarantines records whose board no longer exists. Same-title tickets with different IDs remain separate. Contradictory activity, baseline-only records, newer record versions and conflicting full payloads are flagged for review rather than guessed.
-
-Synced boards no longer need this for resurrected tickets: built-in sync applies the same rule automatically (see **Sync Behaviour**). The tool remains useful for exports, column corrections and auditing. For the resurrection pattern—deleted tickets returning through stale moves/updates—an explicit policy can repair from the corrupted export alone:
-
-```bash
-npm run repair:board -- current.json repaired-auto.json --deleted-unless-restored
-```
-
-This policy treats deletion as effective until a later explicit `created`/Undo event. It still flags newer record metadata and equal-time conflicts. Use it only when this matches the intended board state; an unlogged intentional restore/import cannot be distinguished from corruption. Individual `--keep CARD_ID` and `--delete CARD_ID` decisions override the policy. The report records decisions, event IDs, quarantined records and input/output SHA-256 hashes. Existing output files are never overwritten.
-
-Review the report, then apply the candidate through **Settings → Advanced → Overwrite import**, not the additive importer. Activity is not a complete operation log: it cannot recreate missing descriptions/checklists or the exact historical drag order. Within affected columns, the tool keeps the relative order of existing cards and appends repaired arrivals in event order. An export timestamp is not a sync watermark, and absence from an older snapshot alone is not evidence of deletion. This is intentionally an offline review tool, not a silent background repair.
+Settings contains **General**, **Boards**, and **Backup**. **Export JSON** and additive **Import JSON** remain available; there is no board repair or overwrite operation. Old pause flags no longer stop sync, and existing on-device backups are left untouched. Boards whose shared history was reset by an older release retain their history identifiers: incompatible local copies cannot merge or upload into them. Export such a local copy before joining the cloud board in a new browser profile; local records and pending operations are not discarded automatically.
 
 ### Prerequisites
 
@@ -250,7 +217,7 @@ The sync interval is configurable in Settings (1 min → 1 hour). Default is **1
 
 Record contents are last-write-wins (board, column, card or activity event), ordered by operation timestamp with an operation-ID tie-breaker. Concurrent edits to the same card are not field-merged. Pending local operations survive failed requests and reloads.
 
-**Deletes are authoritative.** Whether a card or column exists is decided only by create and delete operations; edits and moves never change it. A stale or offline device that edits a card deleted elsewhere cannot bring it back, regardless of its timestamp. Only an explicit restore—Undo, a recovery choice, or Overwrite import—can. Card deletions recorded in the activity log count as well, so tickets resurrected by earlier versions disappear again on every device and in the cloud after upgrading, with no manual merge. Merging an export with **Import JSON** never restores deleted cards.
+**Deletes are authoritative.** Whether a card or column exists is decided only by create and delete operations; edits and moves never change it. A stale or offline device that edits a card deleted elsewhere cannot bring it back, regardless of its timestamp. Undo explicitly restores a deleted card. Card deletions recorded in the activity log count as well, so tickets resurrected by earlier versions disappear again on every device and in the cloud after upgrading, with no manual merge. Merging an export with **Import JSON** never restores deleted cards.
 
 ---
 
@@ -297,7 +264,7 @@ flowboard/
 Bump the `CACHE` constant in `public/sw.js` before each deployment:
 
 ```js
-const CACHE = 'flowboard-v1.2.3';
+const CACHE = 'flowboard-v1.2.4';
 ```
 
 The new worker refreshes the app shell and retains cached, hashed bundles for older open tabs. Update checks bypass the HTTP cache and also run when the app becomes visible or reconnects. An open app shows a **Reload** notification after activation instead of discarding unsaved drafts. A normal online reload loads the new app.

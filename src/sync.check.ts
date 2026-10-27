@@ -1,7 +1,6 @@
 // Runs in real Chromium with IndexedDB against the SQLite-backed worker. See scripts/sync.check.mjs.
 import { SYNC_PROTOCOL, applyOp, emptyState, materialize, mergeStates, type CrdtState } from './services/crdt.ts';
 import { DatabaseService } from './services/DatabaseService.ts';
-import type { SyncRecovery } from './services/DatabaseService.ts';
 import type { Card, CrdtOp } from './types';
 import { CryptoService } from './services/CryptoService.ts';
 import { createElement } from 'react';
@@ -245,122 +244,57 @@ async function run() {
   assert(autoSynced, 'local edits trigger a debounced sync without reload or settings interaction');
   results.push('Automatic debounced sync after local edits');
 
-  // Upgrade an actual old-style IndexedDB copy: no per-record clocks or deletion
-  // markers. A cloud-only card could be a deletion OR another device's new card.
-  for (const choice of ['local', 'cloud'] as const) {
-    await a.useFlowStore.getState().createBoard(`Recovery ${choice}`, 'recovery-password');
-    const recoveryId = a.useFlowStore.getState().activeBoardId!;
-    const recoveryBoard = a.useFlowStore.getState().boards.find(b => b.id === recoveryId)!;
-    const recoveryColumns = a.useFlowStore.getState().columns.filter(c => c.boardId === recoveryId);
-    const todo = recoveryColumns[0].id, done = recoveryColumns[2].id;
-    await a.useFlowStore.getState().createCard(recoveryId, todo, { title: 'Completed locally' });
-    await a.useFlowStore.getState().createCard(recoveryId, todo, { title: 'Deleted locally' });
-    await a.useFlowStore.getState().createCard(recoveryId, todo, { title: 'Unknown cloud-only card' });
-    await syncA();
-    const serverCards = a.useFlowStore.getState().cards.filter(c => c.boardId === recoveryId);
-    const completed = serverCards.find(c => c.title === 'Completed locally')!;
-    const removed = serverCards.find(c => c.title === 'Deleted locally')!;
-    const unknown = serverCards.find(c => c.title === 'Unknown cloud-only card')!;
-    const recoveryKey = (await a.sync.getBoardCreds(recoveryId))!.keyHash;
-    assert((await fetch('/api/board/put', { method: 'POST', body: JSON.stringify({ boardId: recoveryId, keyHash: recoveryKey, protocolVersion: SYNC_PROTOCOL,
-      data: { boards: [recoveryBoard], columns: recoveryColumns, cards: [...serverCards, { ...completed, id: `legacy-only-${choice}` }], activity: [] } }) })).ok, 'store stale full-state baseline');
-    const recoveryCloud = async () => (await (await fetch('/api/crdt/state/get', { method: 'POST',
-      body: JSON.stringify({ boardId: recoveryId, keyHash: recoveryKey }) })).json()).state as CrdtState;
-
-    client = `old-${choice}`;
-    const oldDb = await new DatabaseService().open();
-    await oldDb.put('boards', recoveryBoard);
-    await oldDb.batchPut('columns', recoveryColumns);
-    await oldDb.put('cards', { ...completed, columnId: done });
-    await oldDb.put('activity', { id: `deleted-${choice}`, boardId: recoveryId, cardId: removed.id, type: 'deleted', ts: Date.now() });
-    const queued = { ...completed, id: `queued-${choice}`, title: 'Pending old-client draft' };
-    await oldDb.put('cards', queued);
-    await oldDb.put('crdtOps', { ...op('card.create', Date.now() + 1), boardId: recoveryId, opId: `queued-op-${choice}`, payload: queued });
-    await oldDb.put('boardCreds', { boardId: recoveryId, keyHash: recoveryKey, name: recoveryBoard.name, lastSynced: null });
-    await oldDb.put('settings', { key: 'workerUrl', value: location.origin });
-
-    const upgraded = await load(`upgraded-${choice}`, `old-${choice}`);
-    await upgraded.useFlowStore.getState().saveSettings({ workerUrl: location.origin, syncInterval: 3600 });
-    upgraded.sync.stopTimer();
-    assert(upgraded.useFlowStore.getState().syncRecoveryBoardIds.includes(recoveryId), 'legacy board pauses automatically');
-    let recoveryJoinError = '';
-    try { await upgraded.useFlowStore.getState().joinBoard(recoveryId, 'recovery-password'); }
-    catch (error) { recoveryJoinError = (error as Error).message; }
-    assert(recoveryJoinError.includes('already on this device') && recoveryJoinError.includes('recovery'), 'rejoining a paused board must not report board not found');
-    equal(upgraded.useFlowStore.getState().modal?.type, 'settings', 'rejoin directs a paused board to Settings recovery');
-    upgraded.useFlowStore.getState().closeModal();
-    equal(upgraded.useFlowStore.getState().cards.find(c => c.id === completed.id)!.columnId, done, 'upgrade must not move Done card back');
-    assert(!upgraded.useFlowStore.getState().cards.some(c => c.id === removed.id || c.id === unknown.id), 'upgrade must not resurrect deleted or ambiguous cards');
-    equal(await upgraded.sync.pushCrdtOps(recoveryId), false, 'paused board must not upload even through direct push');
-    assert(!(await recoveryCloud()).cards[queued.id], 'legacy outbox is not uploaded before review');
-    equal((await upgraded.db.getAll('crdtOps')).length, 1, 'preserve legacy outbox');
-    const backup = (await upgraded.db.get<{ value: SyncRecovery }>('settings', `syncRecovery:${recoveryId}`))!.value;
-    equal(backup.local.cards[completed.id].columnId, done, 'backup retains pre-merge Done position');
-    assert(!backup.local.cards[removed.id], 'backup retains original absence without inventing a tombstone');
-    const createUrl = URL.createObjectURL, click = HTMLAnchorElement.prototype.click;
-    let exported: Blob | undefined;
-    URL.createObjectURL = blob => { if (blob instanceof Blob) exported = blob; return createUrl(blob); };
-    HTMLAnchorElement.prototype.click = () => {};
-    try { await upgraded.useFlowStore.getState().exportSyncRecovery(recoveryId); }
-    finally { URL.createObjectURL = createUrl; HTMLAnchorElement.prototype.click = click; }
-    const exportedData = JSON.parse(await exported!.text());
-    equal(exportedData.cards.find((c: Card) => c.id === completed.id).columnId, done, 'recovery export remains a regular importable board');
-    assert(exportedData.recovery.remote.cards[removed.id], 'export includes the cloud version without merging it');
-
-    // The central transaction also protects a remote callback already in flight.
-    const remoteBefore = await recoveryCloud();
-    await upgraded.db.updateSyncState(recoveryId, emptyState(), state => { mergeStates(state, remoteBefore); return []; }, { remote: true });
-    equal((await upgraded.db.get<Card>('cards', completed.id))!.columnId, done, 'remote transaction cannot bypass pause');
-    assert(!await upgraded.db.get('cards', removed.id), 'remote transaction cannot bypass deletion protection');
-    await upgraded.useFlowStore.getState().updateCard(completed.id, { title: 'Edited while paused' });
-    upgraded.sync.stopTimer();
-
-    const resumed = await load(`reloaded-${choice}`, `old-${choice}`);
-    await resumed.useFlowStore.getState().saveSettings({ workerUrl: location.origin, syncInterval: 3600 });
-    resumed.sync.stopTimer();
-    assert(resumed.useFlowStore.getState().syncRecoveryBoardIds.includes(recoveryId), 'recovery pause survives reload');
-    equal(resumed.useFlowStore.getState().cards.find(c => c.id === completed.id)!.title, 'Edited while paused', 'local editing works during recovery');
-
-    const fetchBefore = window.fetch;
-    window.fetch = async (...args) => String(args[0]).endsWith('/api/crdt/state/get')
-      ? new Response(JSON.stringify({ found: true, state: remoteBefore })) : fetchBefore(...args);
-    let blocked = false;
-    try { await resumed.useFlowStore.getState().resolveSyncRecovery(recoveryId, choice); }
-    catch { blocked = true; }
-    finally { window.fetch = fetchBefore; }
-    assert(blocked && await resumed.sync.isSyncPaused(recoveryId), 'old worker cannot silently resolve recovery');
-
-    // Resolution, backup, versions and outbox must still roll back as one unit.
-    try { await resumed.db.updateSyncState(recoveryId, emptyState(), () => { throw new Error('failed resolution'); }, { resolveWith: remoteBefore }); }
-    catch { /* expected rollback */ }
-    assert(await resumed.sync.isSyncPaused(recoveryId), 'failed resolution must retain pause');
-    await resumed.useFlowStore.getState().resolveSyncRecovery(recoveryId, choice);
-    resumed.sync.stopTimer();
-    assert(!await resumed.sync.isSyncPaused(recoveryId), 'explicit choice resumes sync');
-    const recovered = await recoveryCloud();
-    if (choice === 'local') {
-      equal(recovered.cards[completed.id].columnId, done, 'local choice publishes Done position');
-      equal(recovered.cards[completed.id].title, 'Edited while paused', 'local choice includes edits since backup');
-      assert(recovered.cards[removed.id].__deleted && recovered.cards[unknown.id].__deleted, 'only explicit local choice removes cloud-only cards');
-      assert(recovered.cards[queued.id] && !recovered.cards[queued.id].__deleted, 'local choice retains pending draft');
-    } else {
-      equal(resumed.useFlowStore.getState().cards.find(c => c.id === completed.id)!.columnId, todo, 'cloud position is used only after explicit approval');
-      assert(resumed.useFlowStore.getState().cards.some(c => c.id === removed.id), 'cloud card is restored only after explicit approval');
-      assert(recovered.cards[queued.id].__deleted, 'superseded pending draft cannot leak back after cloud choice');
-    }
-    const saved = (await resumed.db.get<{ value: SyncRecovery }>('settings', `syncRecovery:${recoveryId}`))!.value;
-    assert(saved.resolved && saved.remote && saved.beforeResolution, 'keep both versions after resolution');
-    equal(saved.beforeResolution!.cards[completed.id].title, 'Edited while paused', 'backup includes edits made while paused');
-    equal(saved.local.cards[completed.id].columnId, done, 'original migration backup is never replaced');
-    equal((await resumed.db.getAll('crdtOps')).length, 0, 'recovery operations are acknowledged');
-    const fresh = await load(`recovered-join-${choice}`, `recovered-join-${choice}`);
-    assert(await fresh.useFlowStore.getState().joinBoard(recoveryId, 'recovery-password'), 'new device can join recovered board');
-    await fresh.useFlowStore.getState().saveSettings({ workerUrl: location.origin, syncInterval: 3600 });
-    fresh.sync.stopTimer();
-    assert(!fresh.useFlowStore.getState().cards.some(c => c.id === `legacy-only-${choice}`), 'joining recovered board cannot resurrect legacy-only records');
-    if (choice === 'local') assert(!fresh.useFlowStore.getState().cards.some(c => c.id === removed.id), 'joining recovered board respects recovered deletions');
-    results.push(`Legacy upgrade: Done/deletion protection, durable pause/backup, local edits and explicit ${choice} recovery`);
+  // Old pause flags are inert. Upgrade and sync an actual unversioned IndexedDB copy.
+  await a.useFlowStore.getState().createBoard('Upgrade board', 'upgrade-password');
+  const upgradeId = a.useFlowStore.getState().activeBoardId!;
+  const upgradeBoard = a.useFlowStore.getState().boards.find(b => b.id === upgradeId)!;
+  const upgradeColumns = a.useFlowStore.getState().columns.filter(c => c.boardId === upgradeId);
+  await a.useFlowStore.getState().createCard(upgradeId, upgradeColumns[0].id, { title: 'Deleted then moved by an old client' });
+  await a.useFlowStore.getState().createCard(upgradeId, upgradeColumns[0].id, { title: 'Cloud-only card' });
+  await syncA();
+  const removed = a.useFlowStore.getState().cards.find(c => c.boardId === upgradeId)!;
+  const upgradeKey = (await a.sync.getBoardCreds(upgradeId))!.keyHash;
+  client = 'old-upgrade';
+  const oldDb = await new DatabaseService().open();
+  await oldDb.put('boards', upgradeBoard);
+  await oldDb.batchPut('columns', upgradeColumns);
+  await oldDb.put('cards', { ...removed, columnId: upgradeColumns[2].id });
+  const upgradeState = (await a.db.get<{ value: CrdtState }>('settings', `crdtState:${upgradeId}`))!.value;
+  const deletedAt = Math.max(Date.now(), upgradeState.cards[removed.id].__ts!) + 10000;
+  await oldDb.put('activity', { id: 'old-delete', boardId: upgradeId, cardId: removed.id, type: 'deleted', ts: deletedAt });
+  const queued = { ...removed, id: 'pending-upgrade-card', title: 'Pending old-client draft' };
+  const unversioned = { ...queued, id: 'unversioned-local-card', title: 'Unversioned local-only card' };
+  await oldDb.batchPut('cards', [queued, unversioned]);
+  await oldDb.batchPut('crdtOps', [
+    { ...op('card.create', deletedAt + 1), boardId: upgradeId, opId: 'old-queued-create', payload: queued },
+    { ...op('card.move', deletedAt + 2), boardId: upgradeId, opId: 'old-queued-move', payload: removed },
+  ]);
+  await oldDb.put('boardCreds', { boardId: upgradeId, keyHash: upgradeKey, name: upgradeBoard.name, lastSynced: null });
+  await oldDb.put('settings', { key: 'workerUrl', value: location.origin });
+  const oldBackup = { local: emptyState(), pending: ['do not delete this backup'] };
+  await oldDb.put('settings', { key: `syncRecovery:${upgradeId}`, value: { ...oldBackup, resolved: false } });
+  await oldDb.put('settings', { key: `syncRepairBackup:${upgradeId}:old`, value: oldBackup });
+  const upgraded = await load('upgraded', 'old-upgrade');
+  await upgraded.useFlowStore.getState().saveSettings({ workerUrl: location.origin, syncInterval: 3600 });
+  upgraded.sync.stopTimer();
+  assert(!upgraded.useFlowStore.getState().cards.some(c => c.id === removed.id), 'upgrade automatically removes the resurrected card');
+  assert(upgraded.useFlowStore.getState().cards.some(c => c.title === 'Cloud-only card'), 'normal merging retains cloud-only cards');
+  equal((await upgraded.db.getAll('crdtOps')).length, 0, 'old pause flags no longer block pending uploads');
+  const upgradedCloud = await (await fetch('/api/crdt/state/get', { method: 'POST', body: JSON.stringify({ boardId: upgradeId, keyHash: upgradeKey }) })).json();
+  assert(upgradedCloud.state.cards[removed.id].__deleted, 'legacy activity deletion reaches the cloud despite a newer queued move');
+  assert(upgradedCloud.data.cards.some((c: Card) => c.id === queued.id), 'pending old-client draft reaches the cloud');
+  equal(upgradedCloud.state.cards[unversioned.id].__ts, 0, 'unversioned local records migrate without a fresh clock');
+  equal((await oldDb.get<{ value: unknown }>('settings', `syncRepairBackup:${upgradeId}:old`))!.value, oldBackup, 'existing backups are not discarded');
+  assert(await upgraded.useFlowStore.getState().joinBoard(upgradeId, 'upgrade-password'), 'an old pause flag does not block rejoining');
+  upgraded.sync.stopTimer();
+  const fresh = await load('upgrade-joiner', 'upgrade-joiner');
+  assert(await fresh.useFlowStore.getState().joinBoard(upgradeId, 'upgrade-password'), 'a new device joins the upgraded board');
+  fresh.sync.stopTimer();
+  assert(!fresh.useFlowStore.getState().cards.some(c => c.id === removed.id), 'new joins cannot bring back the deleted card');
+  for (const field of ['beginSyncRepair', 'overwriteImport', 'resolveSyncRecovery', 'exportSyncRecovery', 'syncRecoveryBoardIds']) {
+    assert(!(field in upgraded.useFlowStore.getState()), `${field} is removed, not just hidden`);
   }
+  results.push('Legacy upgrade resumes sync without repair: pending drafts, automatic deletion handling, zero-clock migration and preserved backups');
 
   await reloadB.useFlowStore.getState().updateCard(cardId, { title: 'Waiting for worker upgrade' });
   reloadB.sync.stopTimer();
@@ -378,110 +312,26 @@ async function run() {
   equal((await reloadB.db.getAll('crdtOps')).length, queuedCount, 'keep local edits until worker is upgraded');
   results.push('Worker-version handshake blocks unsafe uploads without discarding the outbox');
 
-  // Manually repair an already-versioned/rejoined board, not only a legacy upgrade.
-  const repair = await load('manual-repair', 'manual-repair');
-  const repairSync = async () => { await repair.useFlowStore.getState().saveSettings({ workerUrl: location.origin, syncInterval: 3600 }); repair.sync.stopTimer(); };
-  await repair.useFlowStore.getState().createBoard('Board to repair', 'repair-password');
-  const repairId = repair.useFlowStore.getState().activeBoardId!;
-  const repairColumn = repair.useFlowStore.getState().columns.find(c => c.boardId === repairId)!;
-  await repair.useFlowStore.getState().createCard(repairId, repairColumn.id, { title: 'Corrupted ticket' });
-  const corruptCard = repair.useFlowStore.getState().cards.find(c => c.boardId === repairId)!;
-  await repairSync();
-  const stale = await load('stale-repair-device', 'stale-repair-device');
-  assert(await stale.useFlowStore.getState().joinBoard(repairId, 'repair-password'), 'second device joins before repair');
-  await stale.useFlowStore.getState().saveSettings({ workerUrl: location.origin, syncInterval: 3600 });
-  await stale.useFlowStore.getState().updateCard(corruptCard.id, { title: 'Pending stale-device edit' });
-  stale.sync.stopTimer();
-  const staleQueue = (await stale.db.getSyncOutbox(repairId)).ops.length;
-  assert(staleQueue > 0, 'second device has pending pre-repair work');
-
-  await repair.useFlowStore.getState().createBoard('Unrelated board', 'other-password');
-  const otherId = repair.useFlowStore.getState().activeBoardId!;
-  const otherColumns = repair.useFlowStore.getState().columns.filter(c => c.boardId === otherId);
-  await repairSync();
-  const importedCard = { ...corruptCard, id: 'snapshot-only-card', title: 'Known-good snapshot' };
-  const repairSnapshot = { boards: [repair.useFlowStore.getState().boards.find(b => b.id === repairId)!], columns: [repairColumn],
-    cards: Array.from({ length: 125 }, (_, i) => ({ ...importedCard, id: `${importedCard.id}-${i}`, order: i })),
-    activity: [{ id: 'snapshot-only-event', boardId: repairId, cardId: `${importedCard.id}-0`, type: 'created', ts: 1 }] };
-  const beforeRepairCards = JSON.stringify(repair.useFlowStore.getState().cards);
-  for (const invalid of ['{}', JSON.stringify({ ...repairSnapshot, boards: [{ id: 'wrong-board', name: 'Wrong', createdAt: 1 }] }),
-    JSON.stringify({ ...repairSnapshot, cards: [{ ...importedCard, columnId: 'missing-column' }] })]) {
-    let rejected = false;
-    try { await repair.useFlowStore.getState().overwriteImport(repairId, invalid); }
-    catch { rejected = true; }
-    assert(rejected, 'reject malformed and wrong-board snapshots');
-    assert(!await repair.sync.isSyncPaused(repairId), 'invalid import must not begin repair');
-    equal(JSON.stringify(repair.useFlowStore.getState().cards), beforeRepairCards, 'invalid overwrite leaves the board untouched');
-  }
-  await repair.useFlowStore.getState().beginSyncRepair(repairId);
-  assert(await repair.sync.isSyncPaused(repairId), 'manual repair pauses a fully versioned board');
-  await repair.useFlowStore.getState().updateCard(corruptCard.id, { title: 'Draft while paused' });
-  repair.sync.stopTimer();
-  const pausedCards = JSON.stringify(repair.useFlowStore.getState().cards);
-  const replaceFetch = window.fetch;
-  window.fetch = async (...args) => String(args[0]).endsWith('/api/crdt/state/replace')
-    ? new Response(JSON.stringify({ error: 'Simulated replacement failure' }), { status: 503 }) : replaceFetch(...args);
-  let overwriteFailed = false;
-  try { await repair.useFlowStore.getState().overwriteImport(repairId, JSON.stringify(repairSnapshot)); }
-  catch { overwriteFailed = true; }
-  finally { window.fetch = replaceFetch; }
-  assert(overwriteFailed && await repair.sync.isSyncPaused(repairId), 'failed overwrite stays paused');
-  equal(JSON.stringify(repair.useFlowStore.getState().cards), pausedCards, 'failed overwrite keeps all local records');
-  assert((await repair.db.getSyncOutbox(repairId)).ops.length > 0, 'failed overwrite keeps pending operations');
-
-  // If D1 committed but the local disk failed, keep the old copy paused and let
-  // Use cloud finish adopting the reset instead of ever uploading its old queue.
-  const writeBeforeReset = repair.db.updateSyncState.bind(repair.db);
-  repair.db.updateSyncState = (...args) => args[3]?.replaceWith
-    ? Promise.reject(new Error('Simulated local replacement failure')) : writeBeforeReset(...args);
-  let localResetFailed = false;
-  try { await repair.useFlowStore.getState().overwriteImport(repairId, JSON.stringify(repairSnapshot)); }
-  catch { localResetFailed = true; }
-  finally { repair.db.updateSyncState = writeBeforeReset; }
-  assert(localResetFailed && await repair.sync.isSyncPaused(repairId), 'local failure after a cloud reset stays paused');
-  equal(JSON.stringify(repair.useFlowStore.getState().cards), pausedCards, 'local failure preserves the previous device copy');
-  await repair.useFlowStore.getState().resolveSyncRecovery(repairId, 'cloud');
-  repair.sync.stopTimer();
-  await repair.useFlowStore.getState().overwriteImport(repairId, JSON.stringify({ ...repairSnapshot,
-    boards: [...repairSnapshot.boards, repair.useFlowStore.getState().boards.find(b => b.id === otherId)!],
-    columns: [...repairSnapshot.columns, ...otherColumns] }));
-  repair.sync.stopTimer();
-  equal(repair.useFlowStore.getState().cards.filter(c => c.boardId === repairId).length, 125, 'all snapshot cards replace the board in one reset');
-  assert(!repair.useFlowStore.getState().cards.some(c => c.id === corruptCard.id), 'remove a ticket absent from the snapshot');
-  equal(repair.useFlowStore.getState().activity.filter(a => a.boardId === repairId).map(a => a.id), ['snapshot-only-event'], 'replace, not merge, Timeline history');
-  equal(repair.useFlowStore.getState().columns.filter(c => c.boardId === otherId), otherColumns, 'other boards are unchanged');
-  equal(await repair.db.get('cards', corruptCard.id), undefined, 'remove stale records from IndexedDB too');
-  equal((await repair.db.getSyncOutbox(repairId)).ops.length, 0, 'discard superseded outbox only after replacement succeeds');
-  const repairBackups = (await repair.db.getAll<{ key: string; value: { local?: CrdtState; pending?: CrdtOp[] } }>('settings'))
-    .filter(s => s.key.startsWith(`syncRepairBackup:${repairId}:`));
-  assert(repairBackups.some(s => s.value.local?.cards[corruptCard.id]?.title === 'Draft while paused' && s.value.pending?.length), 'keep overwritten records and outbox in a separate durable backup');
-  const exportUrl = URL.createObjectURL, exportClick = HTMLAnchorElement.prototype.click;
-  let repairExport: Blob | undefined;
-  URL.createObjectURL = blob => { if (blob instanceof Blob) repairExport = blob; return exportUrl(blob); };
-  HTMLAnchorElement.prototype.click = () => {};
-  try { await repair.useFlowStore.getState().exportSyncRecovery(repairId); }
-  finally { URL.createObjectURL = exportUrl; HTMLAnchorElement.prototype.click = exportClick; }
-  const repairExportData = JSON.parse(await repairExport!.text());
-  assert(repairExportData.recovery.backups.some((s: { local?: CrdtState }) => s.local?.cards[corruptCard.id]?.title === 'Draft while paused'), 'export contains the retained pre-overwrite copies');
-  equal(await stale.sync.pushCrdtOps(repairId), false, 'pre-repair device cannot upload even before it pulls the reset');
-  equal((await stale.db.getSyncOutbox(repairId)).ops.length, staleQueue, 'rejected stale upload keeps pending work');
-  await stale.useFlowStore.getState().saveSettings({ workerUrl: location.origin, syncInterval: 3600 });
-  stale.sync.stopTimer();
-  assert(await stale.sync.isSyncPaused(repairId), 'a changed cloud generation requires review');
-  await stale.useFlowStore.getState().resolveSyncRecovery(repairId, 'cloud');
-  stale.sync.stopTimer();
-  equal(stale.useFlowStore.getState().cards.filter(c => c.boardId === repairId).length, 125, 'cloud choice adopts the repaired board exactly');
-  equal(stale.useFlowStore.getState().activity.filter(a => a.boardId === repairId).map(a => a.id), ['snapshot-only-event'], 'cloud choice cannot resurrect pre-reset Timeline events');
-  equal((await stale.db.getSyncOutbox(repairId)).ops.length, 0, 'old queue is archived instead of relabelled with the new generation');
-  const repairedReload = await load('repaired-reload', 'manual-repair');
-  await repairedReload.useFlowStore.getState().saveSettings({ workerUrl: location.origin, syncInterval: 3600 });
-  repairedReload.sync.stopTimer();
-  equal(repairedReload.useFlowStore.getState().cards.filter(c => c.boardId === repairId).length, 125, 'overwrite survives reload');
-  const repairJoiner = await load('repair-new-joiner', 'repair-new-joiner');
-  assert(await repairJoiner.useFlowStore.getState().joinBoard(repairId, 'repair-password'), 'new device joins the overwritten board');
-  repairJoiner.sync.stopTimer();
-  equal(repairJoiner.useFlowStore.getState().activity.filter(a => a.boardId === repairId).map(a => a.id), ['snapshot-only-event'], 'new joins use only replacement history');
-  results.push('Advanced manual repair and 125-card overwrite: validation, failure safety, backups, exact history replacement, reload and stale-device review');
+  // Histories reset by older releases remain fenced, without any replacement actions.
+  const oldHistory = emptyState();
+  oldHistory.boards.history = { id: 'history', __ts: 1, __opId: 'old-board' };
+  const draft = { ...op('card.create', 2, 'Keep local draft', 'history-draft'), boardId: 'history', payload: { id: 'history-draft', boardId: 'history' } };
+  await db.updateSyncState('history', oldHistory, local => { applyOp(local, draft); return [draft]; });
+  const newHistory = emptyState();
+  newHistory.boards.history = { id: 'history', syncGeneration: 'existing-reset', __ts: 3, __opId: 'new-board' };
+  let mismatched = false;
+  try { await db.updateSyncState('history', emptyState(), local => { mergeStates(local, newHistory); return []; }, newHistory); }
+  catch { mismatched = true; }
+  assert(mismatched, 'a changed history cannot silently merge or relabel old pending creates');
+  equal((await db.getSyncOutbox('history')).ops.map(o => o.opId), [draft.opId], 'mismatched history preserves pending work');
+  assert(await db.get('cards', 'history-draft'), 'mismatched history keeps the local draft');
+  client = 'compatible-history';
+  const compatibleDb = await new DatabaseService().open();
+  await compatibleDb.updateSyncState('history', emptyState(), local => { mergeStates(local, newHistory); return []; }, newHistory);
+  const sameHistory = await compatibleDb.updateSyncState('history', emptyState(), local => { applyOp(local, draft); return [draft]; }, newHistory);
+  equal(sameHistory.boards.history.syncGeneration, 'existing-reset', 'new joins and matching histories retain existing identifiers');
+  assert(await compatibleDb.get('cards', 'history-draft'), 'matching histories still allow ordinary edits');
+  results.push('Existing cloud history identifiers still fence incompatible local copies without discarding drafts');
 
   // Exercise the actual join screen: rejected joins must show the real error,
   // keep the dialog open, and clear the busy state so retry is possible.
@@ -518,52 +368,42 @@ async function run() {
   }
   results.push('Settings join UI keeps actionable errors visible and allows retry');
 
-  const beforeRepairUi = settingsStore.getState();
-  const originalConfirm = window.confirm;
-  let manualStarts = 0, overwriteAttempts = 0;
+  const beforeSettingsUi = settingsStore.getState();
   let savedSettings: { workerUrl: string; syncInterval: number } | undefined;
-  settingsStore.setState({ boards: repairSnapshot.boards, activeBoardId: repairId, syncRecoveryBoardIds: [],
-    saveSettings: async value => { savedSettings = value; },
-    beginSyncRepair: async id => { manualStarts++; settingsStore.setState({ syncRecoveryBoardIds: [id] }); },
-    overwriteImport: async (id, json) => {
-      equal(id, repairId, 'UI overwrite targets the selected board');
-      equal(JSON.parse(json).cards.length, 125, 'UI passes the chosen snapshot');
-      overwriteAttempts++;
-      throw new Error('Worker must be upgraded before overwriting.');
-    } });
-  const repairHost = document.createElement('div');
-  document.body.append(repairHost);
-  const repairRoot = createRoot(repairHost);
+  settingsStore.setState({ boards: [upgradeBoard], activeBoardId: upgradeId,
+    saveSettings: async value => { savedSettings = value; } });
+  const settingsHost = document.createElement('div');
+  document.body.append(settingsHost);
+  const settingsRoot = createRoot(settingsHost);
   try {
-    flushSync(() => repairRoot.render(createElement(SettingsModal)));
-    const tabs = [...repairHost.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
-    equal(tabs.map(t => t.textContent), ['General', 'Boards', 'Backup', 'Advanced'], 'settings are split into four named tabs');
+    flushSync(() => settingsRoot.render(createElement(SettingsModal)));
+    const tabs = [...settingsHost.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    equal(tabs.map(t => t.textContent), ['General', 'Boards', 'Backup'], 'only the three supported settings tabs remain');
     const tab = (name: string) => tabs.find(t => t.textContent === name)!;
     const panel = (name: string) => document.getElementById(tab(name).getAttribute('aria-controls')!)!;
     const selectTab = (name: string) => flushSync(() => tab(name).click());
     assert(tab('General').getAttribute('aria-selected') === 'true' && !panel('General').hidden, 'normal settings start on General');
-    assert(panel('Backup').hidden && panel('Advanced').hidden, 'inactive tab panels are hidden');
+    assert(panel('Backup').hidden && panel('Boards').hidden, 'inactive tab panels are hidden');
     equal(tabs.filter(t => t.tabIndex === 0).length, 1, 'only the active tab is in the tab order');
     for (const button of tabs) equal(panel(button.textContent!).getAttribute('aria-labelledby'), button.id, 'each panel labels itself with its tab');
-    const workerField = repairHost.querySelector<HTMLInputElement>('#worker-url')!;
-    const joinField = repairHost.querySelector<HTMLInputElement>('#join-id')!;
-    const joinPassword = repairHost.querySelector<HTMLInputElement>('#join-pw')!;
+    const workerField = settingsHost.querySelector<HTMLInputElement>('#worker-url')!;
+    const joinField = settingsHost.querySelector<HTMLInputElement>('#join-id')!;
+    const joinPassword = settingsHost.querySelector<HTMLInputElement>('#join-pw')!;
     assert(panel('General').contains(workerField) && panel('Boards').contains(joinField) && !panel('General').contains(joinField), 'sync settings stay in General; joining moves to Boards');
     flushSync(() => {
       for (const [field, value] of [[workerField, ' https://worker.example.test '], [joinField, 'draft-board-id'], [joinPassword, 'draft-test-password']] as const) {
         Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, value);
         field.dispatchEvent(new Event('input', { bubbles: true }));
       }
-      const interval = repairHost.querySelector<HTMLSelectElement>('#sync-interval')!;
+      const interval = settingsHost.querySelector<HTMLSelectElement>('#sync-interval')!;
       interval.value = '60';
       interval.dispatchEvent(new Event('change', { bubbles: true }));
     });
     selectTab('Backup');
     assert(!panel('Backup').hidden && panel('General').hidden, 'Backup shows only backup tools');
     assert(panel('Backup').textContent?.includes('Export JSON') && panel('Backup').textContent?.includes('Import JSON'), 'backup actions are available');
-    assert(![...repairHost.querySelectorAll('button')].some(b => b.textContent === 'Save settings'), 'Save settings belongs to General');
-    selectTab('Advanced');
-    for (const [key, expected] of [['Home', 'General'], ['ArrowLeft', 'Advanced'], ['ArrowRight', 'General'], ['End', 'Advanced'], ['ArrowLeft', 'Backup']]) {
+    assert(![...settingsHost.querySelectorAll('button')].some(b => b.textContent === 'Save settings'), 'Save settings belongs to General');
+    for (const [key, expected] of [['Home', 'General'], ['ArrowLeft', 'Backup'], ['ArrowRight', 'General'], ['End', 'Backup'], ['ArrowLeft', 'Boards']]) {
       const current = tabs.find(t => t.getAttribute('aria-selected') === 'true')!;
       flushSync(() => current.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })));
       assert(tab(expected).getAttribute('aria-selected') === 'true' && document.activeElement === tab(expected), `${key} selects and focuses the correct tab`);
@@ -572,49 +412,17 @@ async function run() {
     equal(workerField.value, ' https://worker.example.test ', 'tab switches preserve unsaved worker URL');
     equal(joinField.value, 'draft-board-id', 'tab switches preserve the join draft');
     equal(joinPassword.value, 'draft-test-password', 'tab switches preserve the join password');
-    [...repairHost.querySelectorAll('button')].find(b => b.textContent === 'Save settings')!.click();
+    [...settingsHost.querySelectorAll('button')].find(b => b.textContent === 'Save settings')!.click();
     await new Promise(resolve => setTimeout(resolve, 0));
     equal(savedSettings, { workerUrl: 'https://worker.example.test', syncInterval: 60 }, 'General saves its preserved form values');
-    selectTab('Advanced');
-    const advanced = panel('Advanced');
-    assert(!advanced.hidden, 'Advanced exposes the repair tools');
-    const start = [...advanced.querySelectorAll('button')].find(b => b.textContent === 'Repair this board')!;
-    start.click();
-    await new Promise(resolve => setTimeout(resolve, 0));
-    equal(manualStarts, 1, 'Repair is available for an already-versioned board');
-    const overwriteButton = [...advanced.querySelectorAll('button')].find(b => b.textContent === 'Overwrite import')!;
-    assert(overwriteButton, 'paused repair offers Overwrite import under Advanced');
-    overwriteButton.click();
-    const upload = advanced.querySelector<HTMLInputElement>('input[type="file"]')!;
-    const choose = async (json: string) => {
-      const transfer = new DataTransfer();
-      transfer.items.add(new File([json], 'snapshot.json', { type: 'application/json' }));
-      upload.files = transfer.files;
-      upload.dispatchEvent(new Event('change', { bubbles: true }));
-      await new Promise(resolve => setTimeout(resolve, 25));
-    };
-    window.confirm = () => { throw new Error('Invalid file must not reach confirmation'); };
-    await choose('{}');
-    equal(overwriteAttempts, 0, 'invalid file cannot overwrite');
-    assert(advanced.querySelector('[role="alert"]')?.textContent?.includes('snapshot'), 'invalid snapshot error remains visible');
-    window.confirm = () => false;
-    await choose(JSON.stringify(repairSnapshot));
-    equal(overwriteAttempts, 0, 'cancelling confirmation makes no replacement call');
-    window.confirm = message => { assert(String(message).includes('Timeline history') && String(message).includes('shared sync history'), 'confirmation explains destructive scope'); return true; };
-    await choose(JSON.stringify(repairSnapshot));
-    equal(overwriteAttempts, 1, 'confirmed snapshot invokes overwrite');
-    assert(advanced.querySelector('[role="alert"]')?.textContent?.includes('Worker must be upgraded'), 'overwrite failure remains actionable');
-    assert(!overwriteButton.disabled, 'failed overwrite permits retry');
-    flushSync(() => repairRoot.render(createElement(SettingsModal, { key: 'paused-board-settings' })));
-    assert(repairHost.querySelector('[role="tab"][aria-selected="true"]')?.textContent === 'Advanced', 'reopening settings with recovery needed starts on Advanced');
+    assert(!/Repair this board|Sync recovery|Use this device|Use cloud|Overwrite import/.test(settingsHost.textContent ?? ''), 'repair controls are removed from every panel');
+    equal(settingsHost.querySelectorAll('input[type="file"]').length, 1, 'only the additive import picker remains');
   } finally {
-    window.confirm = originalConfirm;
-    flushSync(() => repairRoot.unmount());
-    repairHost.remove();
-    settingsStore.setState(beforeRepairUi, true);
+    flushSync(() => settingsRoot.unmount());
+    settingsHost.remove();
+    settingsStore.setState(beforeSettingsUi, true);
   }
-  results.push('Settings tabs: keyboard navigation, labelled panels, preserved drafts, General save, invite isolation and Advanced recovery default');
-  results.push('Advanced settings UI: manual repair, snapshot picker, validation, destructive confirmation, cancellation and retry');
+  results.push('Settings without repair: three tabs, keyboard navigation, labelled panels, preserved drafts, General save and normal backups');
 
   // Keep the real board at the drop position while a local write is deliberately held open.
   const savedUiState = settingsStore.getState();

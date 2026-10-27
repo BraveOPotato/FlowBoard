@@ -78,8 +78,6 @@
 .settingsTab:hover:not(:disabled) { color: var(--fg); }
 .settingsTab[aria-selected='true'] { background: var(--raised); color: var(--fg); box-shadow: var(--shadow-sm), 0 0 0 1px var(--line); }
 .settingsTab:disabled { opacity: 0.5; }
-.advanced > .message { margin-top: 14px; font-size: 12.5px; }
-.repairPanel { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
 
 .status {
   display: inline-flex;

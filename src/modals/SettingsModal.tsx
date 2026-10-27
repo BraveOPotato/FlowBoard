@@ -1,10 +1,9 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { useFlowStore, sync } from '../store/useFlowStore';
 import { WORKER_URL } from '../constants';
 import { Icon } from '../components/Icon';
 import { cx } from '../utils';
 import { Modal } from './Modal';
-import { parseSnapshot } from '../services/crdt';
 import s from './Modal.module.css';
 import ui from '../components/ui.module.css';
 
@@ -15,68 +14,26 @@ const INTERVALS = [
   { value: 1800, label: 'Every 30 minutes' },
   { value: 3600, label: 'Every hour' },
 ];
-const TABS = ['General', 'Boards', 'Backup', 'Advanced'] as const;
+const TABS = ['General', 'Boards', 'Backup'] as const;
 
 export function SettingsModal({ inviteId }: { inviteId?: string }) {
   const workerStatus = useFlowStore((st) => st.workerStatus);
-  const recoveryBoardIds = useFlowStore((st) => st.syncRecoveryBoardIds);
   const boards = useFlowStore((st) => st.boards);
-  const { workerUrl, syncInterval, activeBoardId, saveSettings, joinBoard, exportData, importData, beginSyncRepair, overwriteImport, resolveSyncRecovery, exportSyncRecovery, closeModal, toast } = useFlowStore.getState();
+  const { workerUrl, syncInterval, saveSettings, joinBoard, exportData, importData, closeModal, toast } = useFlowStore.getState();
   const [url, setUrl] = useState(workerUrl || WORKER_URL);
   const [interval, setIntervalVal] = useState(syncInterval || 600);
   const [joinId, setJoinId] = useState(inviteId ?? '');
   const [joinPw, setJoinPw] = useState('');
   const [joinError, setJoinError] = useState('');
-  const [busy, setBusy] = useState<'save' | 'join' | 'recovery' | null>(null);
-  const [tab, setTab] = useState<typeof TABS[number]>(recoveryBoardIds.length > 0 ? 'Advanced' : 'General');
+  const [busy, setBusy] = useState<'save' | 'join' | null>(null);
+  const [tab, setTab] = useState<typeof TABS[number]>('General');
   const settingsId = useId();
-  const [repairBoardId, setRepairBoardId] = useState(activeBoardId ?? boards[0]?.id ?? '');
-  const [repairError, setRepairError] = useState('');
-  const overwriteFile = useRef<HTMLInputElement>(null);
-  const overwriteTarget = useRef('');
-  const selectedBoard = boards.find(b => b.id === repairBoardId) ?? boards[0];
   const [passwords, setPasswords] = useState<Record<string, string | undefined>>({});
   const [shownPasswords, setShownPasswords] = useState<string[]>([]);
 
   useEffect(() => {
     sync.getAllBoardCreds().then(creds => setPasswords(Object.fromEntries(creds.map(c => [c.boardId, c.password])))).catch(() => {});
   }, []);
-
-  const beginRepair = async () => {
-    if (!selectedBoard) return;
-    setBusy('recovery');
-    setRepairError('');
-    try { await beginSyncRepair(selectedBoard.id); }
-    catch (error) { setRepairError((error as Error).message); }
-    finally { setBusy(null); }
-  };
-
-  const importOverwrite = async (file: File) => {
-    const boardId = overwriteTarget.current;
-    setRepairError('');
-    setBusy('recovery');
-    try {
-      const json = await file.text();
-      const snapshot = parseSnapshot(JSON.parse(json), boardId);
-      if (!window.confirm(`Overwrite “${boards.find(b => b.id === boardId)?.name ?? boardId}” with “${file.name}”?\n\nThis replaces all cards, columns and Timeline history with this snapshot (${Object.keys(snapshot.cards).length} cards). Items missing from the snapshot are removed, and the shared sync history is reset. Other boards are not changed.\n\nA separate recovery backup will be kept on this device. Close other FlowBoard tabs/devices first; they must review the repaired cloud version before uploading again.`)) return;
-      await overwriteImport(boardId, json);
-      toast('Snapshot imported. Board and shared history replaced.');
-    } catch (error) { setRepairError(error instanceof Error ? error.message : 'Unable to overwrite this board.'); }
-    finally { setBusy(null); }
-  };
-
-  const recover = async (boardId: string, source: 'local' | 'cloud') => {
-    setRepairError('');
-    if (!window.confirm(source === 'local'
-      ? 'Use this device’s board as the shared version? Cloud-only cards and columns will be deleted. Export and compare the recovery backup first. Update or close every other FlowBoard tab/device before continuing.'
-      : 'Replace this device’s board with the cloud version? Local-only cards and columns will be deleted. If the cloud history was reset, its Timeline also replaces this device’s history. Export and compare the recovery backup first. Update or close every other FlowBoard tab/device before continuing.')) return;
-    setBusy('recovery');
-    try {
-      await resolveSyncRecovery(boardId, source);
-      toast('Recovery choice saved. Check cloud sync before using another device.');
-    } catch (error) { setRepairError((error as Error).message); }
-    finally { setBusy(null); }
-  };
 
   const save = async () => {
     setBusy('save');
@@ -131,7 +88,7 @@ export function SettingsModal({ inviteId }: { inviteId?: string }) {
                 <h3>Cloud sync</h3>
                 <p>Sync boards through your Cloudflare Worker.</p>
               </div>
-              <span className={cx(s.status, !recoveryBoardIds.length && workerStatus && s.statusOk)}>{recoveryBoardIds.length ? 'Recovery needed' : workerStatus ? 'Connected' : 'Unreachable'}</span>
+              <span className={cx(s.status, workerStatus && s.statusOk)}>{workerStatus ? 'Connected' : 'Unreachable'}</span>
             </div>
             <div className={ui.field}>
               <label className={ui.label} htmlFor="worker-url">Worker URL</label>
@@ -248,55 +205,6 @@ export function SettingsModal({ inviteId }: { inviteId?: string }) {
             </label>
           </div>
         </section>
-      )}
-      {!inviteId && (
-        <div className={s.advanced} role="tabpanel" id={`${settingsId}-panel-Advanced`} aria-labelledby={`${settingsId}-tab-Advanced`} hidden={tab !== 'Advanced'}>
-          <div className={s.sectionHead}>
-            <div>
-              <h3>Repair this board</h3>
-              <p>Repair an incorrect board, even after rejoining. Starting a repair saves a backup and pauses this board’s cloud sync. Other boards are unaffected.</p>
-            </div>
-          </div>
-          <div className={ui.field}>
-            <label className={ui.label} htmlFor="repair-board">Board to repair</label>
-            <select id="repair-board" className={ui.input} value={selectedBoard?.id ?? ''} disabled={busy !== null || !boards.length} onChange={e => setRepairBoardId(e.target.value)}>
-              {!boards.length && <option value="">No boards available</option>}
-              {boards.map(board => <option key={board.id} value={board.id}>{board.name}</option>)}
-            </select>
-          </div>
-          <div className={s.actions}>
-            <button className={cx(ui.btn, ui.secondary)} disabled={busy !== null || !selectedBoard || recoveryBoardIds.includes(selectedBoard.id)} onClick={beginRepair}>Repair this board</button>
-          </div>
-          {recoveryBoardIds.length > 0 && <p className={s.message}>Export and compare backups before choosing a version. Recover from one known-good device first; use the repaired cloud version on other devices.</p>}
-          {recoveryBoardIds.map(boardId => (
-            <section className={s.repairPanel} key={boardId} aria-label="Sync recovery">
-              <div className={s.sectionHead}>
-                <div>
-                  <h3>Sync paused: {boards.find(b => b.id === boardId)?.name ?? boardId}</h3>
-                  <p>Choose a board version, or use Overwrite import to replace its cards, columns and Timeline with a matching JSON snapshot. Overwrite also resets shared sync history. If another device already reset the board, Use cloud adopts that history too.</p>
-                </div>
-              </div>
-              <div className={s.actions}>
-                <button className={cx(ui.btn, ui.secondary)} disabled={busy !== null} onClick={async () => {
-                  setBusy('recovery');
-                  try { await exportSyncRecovery(boardId); }
-                  catch (error) { setRepairError((error as Error).message); }
-                  finally { setBusy(null); }
-                }}>Export recovery backup</button>
-                <button className={cx(ui.btn, ui.secondary)} disabled={busy !== null} onClick={() => recover(boardId, 'local')}>Use this device</button>
-                <button className={cx(ui.btn, ui.secondary)} disabled={busy !== null} onClick={() => recover(boardId, 'cloud')}>Use cloud</button>
-                <button className={cx(ui.btn, ui.danger)} disabled={busy !== null} onClick={() => { overwriteTarget.current = boardId; overwriteFile.current?.click(); }}>Overwrite import</button>
-              </div>
-            </section>
-          ))}
-          <input ref={overwriteFile} type="file" hidden accept=".json,application/json" disabled={busy !== null} onChange={e => {
-            const file = e.target.files?.[0];
-            e.target.value = '';
-            if (file) void importOverwrite(file);
-          }} />
-          {busy === 'recovery' && <p className={s.message} role="status">Working on board repair…</p>}
-          {repairError && <p className={s.error} role="alert">{repairError}</p>}
-        </div>
       )}
     </Modal>
   );

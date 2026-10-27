@@ -33,8 +33,8 @@ const content = (r: SyncRecord): Version => [r.__ts ?? 0, r.__opId ?? '', false]
 const lifecycle = (r: SyncRecord): Version => r.__lifeTs !== undefined ? [r.__lifeTs, r.__lifeOpId ?? '', !!r.__deleted]
   : r.__deleted ? [r.__ts ?? 0, r.__opId ?? '', true] : [0, '', false];
 
-// Fields are last-write-wins. Existence is decided only by create/delete (Undo and
-// recovery emit creates), so a stale or concurrent edit can never resurrect a record.
+// Fields are last-write-wins. Existence is decided only by create/delete (including
+// Undo), so a stale or concurrent edit can never resurrect a record.
 function join(local: SyncRecord | undefined, incoming: SyncRecord): SyncRecord {
   const body = local && !later(content(incoming), content(local)) ? { ...incoming, ...local } : { ...local, ...incoming };
   const a = lifecycle(incoming), b = local ? lifecycle(local) : a;
@@ -87,44 +87,6 @@ export function validState(value: unknown, boardId: string): value is CrdtState 
       && (store === 'boards' ? id === boardId && (r.syncGeneration === undefined || validId(r.syncGeneration))
         : r.boardId === boardId || r.__deleted && r.boardId === undefined));
   });
-}
-
-// Overwrite is deliberately stricter than the additive legacy importer: a malformed
-// or wrong-board file must never be interpreted as an empty replacement board.
-export function parseSnapshot(data: unknown, boardId: string): CrdtState {
-  if (!data || typeof data !== 'object' || !validId(boardId)) throw new Error('Choose a FlowBoard JSON snapshot.');
-  const state = emptyState();
-  const number = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v >= 0;
-  for (const store of Object.keys(state) as (keyof CrdtState)[]) {
-    const rows = (data as Record<string, unknown>)[store] ?? (store === 'activity' ? [] : undefined);
-    if (!Array.isArray(rows)) throw new Error(`The snapshot must contain a ${store} array.`);
-    for (const value of rows) {
-      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid snapshot record.');
-      const row = value as SyncRecord;
-      if (!validId(row.id) || store !== 'boards' && !validId(row.boardId)) throw new Error('Invalid snapshot record ID or board ID.');
-      if (store === 'boards' ? row.id !== boardId : row.boardId !== boardId) continue;
-      if (!validId(row.id) || Object.hasOwn(state[store], row.id) || row.__deleted) throw new Error('Invalid or duplicate snapshot record.');
-      if (store === 'boards' && (typeof row.name !== 'string' || !number(row.createdAt))) throw new Error('Invalid snapshot board.');
-      if (store === 'columns' && (typeof row.name !== 'string' || typeof row.color !== 'string' || !number(row.order))) throw new Error('Invalid snapshot column.');
-      if (store === 'cards' && (typeof row.title !== 'string' || typeof row.desc !== 'string' || typeof row.color !== 'string'
-        || !Array.isArray(row.tags) || !row.tags.every(t => typeof t === 'string')
-        || !['low', 'medium', 'high'].includes(String(row.priority)) || !number(row.order) || !number(row.createdAt)
-        || !(row.dueDate === null || typeof row.dueDate === 'string')
-        || !(row.columnId === null || validId(row.columnId))
-        || row.checklist !== undefined && (!Array.isArray(row.checklist) || !row.checklist.every(c => c && validId(c.id) && typeof c.title === 'string' && typeof c.done === 'boolean')))) {
-        throw new Error('Invalid snapshot card.');
-      }
-      if (store === 'activity' && (!validId(row.cardId) || !Number.isSafeInteger(row.ts) || (row.ts as number) < 0
-        || !['created', 'moved', 'updated', 'deleted', 'due_set'].includes(String(row.type)))) throw new Error('Invalid snapshot activity.');
-      const fields = stripMeta(row);
-      delete fields.syncGeneration;
-      delete fields.syncProtocol;
-      state[store][row.id] = { ...fields, __ts: 0, __opId: '' };
-    }
-  }
-  if (!state.boards[boardId]) throw new Error('This snapshot does not contain the selected board. Select the matching board or a different snapshot.');
-  if (Object.values(state.cards).some(c => c.columnId !== null && !Object.hasOwn(state.columns, String(c.columnId)))) throw new Error('A snapshot card refers to a missing column.');
-  return state;
 }
 
 export function materialize(state: CrdtState) {
