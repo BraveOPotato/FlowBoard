@@ -29,6 +29,9 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   }).catch((error) => console.warn('FlowBoard service worker registration failed:', error));
 }
 
+// Ask the browser not to evict IndexedDB under storage pressure; granted silently or denied.
+void navigator.storage?.persist?.().catch(() => {});
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>
