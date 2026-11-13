@@ -18,6 +18,7 @@ A fast, offline-first PWA Kanban board with optional cloud sync via Cloudflare W
 - **Offline-first** — everything stored in IndexedDB, works with no connection
 - **PWA** — installable on desktop and mobile, works offline
 - **Cloud sync** — optional Cloudflare Workers D1 backend, 90-day idle TTL per board
+- **Board webhooks** — POST activity JSON after local changes, with or without cloud sync
 - **Invite links** — share a board ID link; recipient enters the password to join
 - **Mobile-friendly** — hamburger menu, responsive layout, touch drag support
 
@@ -77,7 +78,7 @@ Boards expire after **90 days without reads or writes**. Local data is unaffecte
 
 The worker keeps legacy data readable, but both write endpoints require the current sync protocol. New clients use versioned state reads, including tombstones, so they can catch up after operation-log pruning. Snapshots and pruning commit atomically with compare-and-swap protection against concurrent snapshots. Client records, conflict versions and pending operations commit in one IndexedDB transaction.
 
-Settings contains **General**, **Boards**, and **Backup**. **Export JSON** and additive **Import JSON** remain available; there is no board repair or overwrite operation. Old pause flags no longer stop sync, and existing on-device backups are left untouched. Boards whose shared history was reset by an older release retain their history identifiers: incompatible local copies cannot merge or upload into them. Export such a local copy before joining the cloud board in a new browser profile; local records and pending operations are not discarded automatically.
+Settings contains **General**, **Boards**, **Webhook**, and **Backup**. **Export JSON** and additive **Import JSON** remain available; there is no board repair or overwrite operation. Old pause flags no longer stop sync, and existing on-device backups are left untouched. Boards whose shared history was reset by an older release retain their history identifiers: incompatible local copies cannot merge or upload into them. Export such a local copy before joining the cloud board in a new browser profile; local records and pending operations are not discarded automatically.
 
 ### Prerequisites
 
@@ -218,6 +219,29 @@ The sync interval is configurable in Settings (1 min → 1 hour). Default is **1
 Record contents are last-write-wins (board, column, card or activity event), ordered by operation timestamp with an operation-ID tie-breaker. Concurrent edits to the same card are not field-merged. Pending local operations survive failed requests and reloads.
 
 **Deletes are authoritative.** Whether a card or column exists is decided only by create and delete operations; edits and moves never change it. A stale or offline device that edits a card deleted elsewhere cannot bring it back, regardless of its timestamp. Undo explicitly restores a deleted card. Card deletions recorded in the activity log count as well, so tickets resurrected by earlier versions disappear again on every device and in the cloud after upgrading, with no manual merge. Merging an export with **Import JSON** never restores deleted cards.
+
+---
+
+## Board Webhooks
+
+Open **Settings → Webhook**, choose a board, enter a full HTTP or HTTPS URL, and click **Save webhook**. Leave the URL blank to disable it. The URL is part of the board: it survives reloads, travels with JSON backups, and syncs to other devices through the worker.
+
+After each successful local commit, FlowBoard immediately starts a JSON POST to that board's endpoint, before scheduling worker sync. No worker URL or sync credentials are required for webhook delivery. Each request contains one operation:
+
+```json
+{
+  "opId": "unique-operation-id",
+  "type": "card.update",
+  "ts": 1794500000000,
+  "clientId": "device-id",
+  "boardId": "board-id",
+  "payload": { "id": "card-id", "boardId": "board-id", "title": "Updated title" }
+}
+```
+
+Types cover `board.update`, `column.create/update/delete`, `card.create/update/move/delete`, and `activity.create` (whose payload is the timeline event). A single action can produce multiple operations, such as a card change plus its timeline event or sibling reordering. Removing a board from the device sends `board.remove`. Saving a webhook uses the new URL immediately; clearing it stops new requests. Activity received through cloud sync is never sent again.
+
+The endpoint must allow cross-origin JSON POST requests from the app's origin, including the `OPTIONS` preflight and `Content-Type` header, and return a successful HTTP status. Use HTTPS when the app is served over HTTPS. Requests time out after 10 seconds; failed requests show a notification without blocking local edits or worker sync. Delivery is best effort, with no automatic retries for failed or offline webhook requests.
 
 ---
 
