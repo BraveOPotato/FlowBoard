@@ -8,6 +8,7 @@ export interface Board {
   id: ID;
   name: string;
   createdAt: number;
+  webhookUrl?: string;
 }
 
 export interface Column {
@@ -140,6 +141,7 @@ export interface FlowState {
   dismissToast: (id: string) => void;
   createBoard: (name: string, password: string) => Promise<void>;
   renameBoard: (id: string, name: string) => Promise<void>;
+  saveBoardWebhook: (id: string, url: string) => Promise<void>;
   deleteBoard: (id: string) => Promise<void>;
   createColumn: (boardId: string, name: string) => Promise<void>;
   updateColumn: (id: string, updates: Partial<Column>) => Promise<void>;

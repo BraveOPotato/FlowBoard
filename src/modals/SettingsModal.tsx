@@ -14,19 +14,24 @@ const INTERVALS = [
   { value: 1800, label: 'Every 30 minutes' },
   { value: 3600, label: 'Every hour' },
 ];
-const TABS = ['General', 'Boards', 'Backup'] as const;
+const TABS = ['General', 'Boards', 'Webhook', 'Backup'] as const;
 
 export function SettingsModal({ inviteId }: { inviteId?: string }) {
   const workerStatus = useFlowStore((st) => st.workerStatus);
   const boards = useFlowStore((st) => st.boards);
-  const { workerUrl, syncInterval, saveSettings, joinBoard, exportData, importData, closeModal, toast } = useFlowStore.getState();
+  const { activeBoardId, workerUrl, syncInterval, saveSettings, saveBoardWebhook, joinBoard, exportData, importData, closeModal, toast } = useFlowStore.getState();
   const [url, setUrl] = useState(workerUrl || WORKER_URL);
   const [interval, setIntervalVal] = useState(syncInterval || 600);
   const [joinId, setJoinId] = useState(inviteId ?? '');
   const [joinPw, setJoinPw] = useState('');
   const [joinError, setJoinError] = useState('');
-  const [busy, setBusy] = useState<'save' | 'join' | null>(null);
+  const [busy, setBusy] = useState<'save' | 'join' | 'webhook' | null>(null);
   const [tab, setTab] = useState<typeof TABS[number]>('General');
+  const [webhookBoardId, setWebhookBoardId] = useState(activeBoardId ?? boards[0]?.id ?? '');
+  const [webhookDrafts, setWebhookDrafts] = useState<Record<string, string>>({});
+  const [webhookError, setWebhookError] = useState('');
+  const webhookBoard = boards.find(board => board.id === webhookBoardId);
+  const webhookUrl = webhookDrafts[webhookBoardId] ?? webhookBoard?.webhookUrl ?? '';
   const settingsId = useId();
   const [passwords, setPasswords] = useState<Record<string, string | undefined>>({});
   const [shownPasswords, setShownPasswords] = useState<string[]>([]);
@@ -54,6 +59,17 @@ export function SettingsModal({ inviteId }: { inviteId?: string }) {
     finally { setBusy(null); }
   };
 
+  const saveWebhook = async () => {
+    setWebhookError('');
+    setBusy('webhook');
+    try {
+      await saveBoardWebhook(webhookBoardId, webhookUrl);
+      setWebhookDrafts(drafts => { const next = { ...drafts }; delete next[webhookBoardId]; return next; });
+      toast('Webhook saved');
+    } catch (error) { setWebhookError((error as Error).message); }
+    finally { setBusy(null); }
+  };
+
   return (
     <Modal
       size="md"
@@ -62,6 +78,7 @@ export function SettingsModal({ inviteId }: { inviteId?: string }) {
       footer={<>
         <button className={cx(ui.btn, ui.secondary)} onClick={closeModal}>Close</button>
         {!inviteId && tab === 'General' && <button className={cx(ui.btn, ui.primary)} onClick={save} disabled={busy !== null}>{busy === 'save' ? 'Saving…' : 'Save settings'}</button>}
+        {!inviteId && tab === 'Webhook' && webhookBoard && <button className={cx(ui.btn, ui.primary)} onClick={saveWebhook} disabled={busy !== null}>{busy === 'webhook' ? 'Saving…' : 'Save webhook'}</button>}
       </>}
     >
       {!inviteId && (
@@ -175,6 +192,37 @@ export function SettingsModal({ inviteId }: { inviteId?: string }) {
           </div>
         </section>
       </div>
+
+      {!inviteId && (
+        <section className={s.section} role="tabpanel" id={`${settingsId}-panel-Webhook`} aria-labelledby={`${settingsId}-tab-Webhook`} hidden={tab !== 'Webhook'}>
+          <div className={s.sectionHead}>
+            <div>
+              <h3>Board webhook</h3>
+              <p>Send activity from this board to your URL after each change is saved, even without cloud sync.</p>
+            </div>
+          </div>
+          {boards.length ? <>
+            <div className={ui.field}>
+              <label className={ui.label} htmlFor="webhook-board">Board</label>
+              <select id="webhook-board" className={ui.input} value={webhookBoardId} disabled={busy !== null} onChange={e => { setWebhookBoardId(e.target.value); setWebhookError(''); }}>
+                {boards.map(board => <option key={board.id} value={board.id}>{board.name}</option>)}
+              </select>
+            </div>
+            <form onSubmit={e => { e.preventDefault(); void saveWebhook(); }} noValidate>
+              <div className={ui.field}>
+                <label className={ui.label} htmlFor="webhook-url">Webhook URL</label>
+                <input id="webhook-url" className={ui.input} type="url" value={webhookUrl} disabled={busy !== null || !webhookBoard}
+                  placeholder="https://example.com/webhook" spellCheck={false} autoComplete="off" aria-describedby="webhook-hint"
+                  aria-invalid={!!webhookError} aria-errormessage={webhookError ? 'webhook-error' : undefined}
+                  onChange={e => { setWebhookDrafts(drafts => ({ ...drafts, [webhookBoardId]: e.target.value })); setWebhookError(''); }} />
+                <p id="webhook-hint" className={ui.hint}>Saved with the board and shared through sync and backups. Leave blank to disable. Your endpoint must accept JSON POST requests from this app (CORS).</p>
+              </div>
+              <button type="submit" hidden disabled={busy !== null || !webhookBoard} />
+            </form>
+            {webhookError && <p id="webhook-error" className={s.error} role="alert">{webhookError}</p>}
+          </> : <p className={ui.hint}>Create or join a board to configure its webhook.</p>}
+        </section>
+      )}
 
       {!inviteId && (
         <section className={s.section} role="tabpanel" id={`${settingsId}-panel-Backup`} aria-labelledby={`${settingsId}-tab-Backup`} hidden={tab !== 'Backup'}>

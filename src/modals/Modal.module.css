@@ -65,7 +65,7 @@
 .shortcutRow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
 
 /* Settings-style sections */
-.section + .section { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--line); }
+.section:not([hidden]) + .section { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--line); }
 .sectionHead { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
 .sectionHead > div { flex: 1; }
 .sectionHead h3 { font-size: 14px; font-weight: 600; }
@@ -133,4 +133,5 @@ button.listRow:hover { background: var(--hover); }
     padding-bottom: env(safe-area-inset-bottom);
   }
   .row { grid-template-columns: 1fr; }
+  .settingsTab { padding: 0 6px; }
 }

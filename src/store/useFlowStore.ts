@@ -4,6 +4,7 @@ import { DEFAULT_FILTERS, planMove, uid } from '../utils.ts';
 import { DatabaseService } from '../services/DatabaseService.ts';
 import { SyncService } from '../services/SyncService.ts';
 import { CryptoService } from '../services/CryptoService.ts';
+import { normalizeWebhookUrl, sendWebhook } from '../services/WebhookService.ts';
 import { boardIdFromPath, setBoardUrl } from '../boardRouting.ts';
 import { applyOp, emptyState, generationOf, materialize, mergeStates, stripMeta, validId, validOp, type CrdtState } from '../services/crdt.ts';
 import type {
@@ -40,6 +41,12 @@ export const useFlowStore = create<FlowState>((set, get) => {
 
   let writes = Promise.resolve();
   let syncWork = Promise.resolve();
+  const notifyWebhook = (url: unknown, operations: CrdtOp[]) => {
+    if (typeof url !== 'string' || !url || !operations.length) return;
+    void sendWebhook(url, operations).catch(() => {
+      get().toast('Webhook delivery failed. Check the URL, connection and CORS settings.', '⚠');
+    });
+  };
   const persist = (boardId: string, update: (state: CrdtState) => CrdtOp[], remote?: CrdtState) => {
     const work = writes.then(async () => {
       const initial = emptyState();
@@ -51,8 +58,10 @@ export const useFlowStore = create<FlowState>((set, get) => {
           }
         }
       }
+      let localOps: CrdtOp[] = [];
       const state = await db.updateSyncState(boardId, initial, state => {
-        const ops = update(state);
+        localOps = update(state);
+        const ops = [...localOps];
         // Seed old unversioned records without giving stale data a new clock.
         for (const [store, type] of [['boards', 'board.update'], ['columns', 'column.create'], ['cards', 'card.create'], ['activity', 'activity.create']] as const) {
           for (const row of Object.values(state[store])) {
@@ -64,6 +73,9 @@ export const useFlowStore = create<FlowState>((set, get) => {
         }
         return ops;
       }, remote);
+      // Only notify newly committed local changes, never remote merges or migration seeds.
+      // Use the durable board setting, including a URL just changed in this transaction.
+      notifyWebhook(state.boards[boardId]?.webhookUrl, localOps);
       const data = materialize(state) as unknown as Pick<FlowState, 'boards' | 'columns' | 'cards' | 'activity'>;
       const latest = get();
       set({
@@ -276,8 +288,13 @@ export const useFlowStore = create<FlowState>((set, get) => {
     renameBoard: async (id, name) => {
       const board = get().boards.find((b) => b.id === id);
       if (!board) return;
-      const next = { ...board, name };
-      await commit(id, [{ type: 'board.update', payload: { ...next, boardId: id } }]);
+      await commit(id, [{ type: 'board.update', payload: { id, boardId: id, name } }]);
+    },
+
+    saveBoardWebhook: async (id, url) => {
+      const webhookUrl = normalizeWebhookUrl(url);
+      if (!get().boards.some(b => b.id === id)) throw new Error('Select an existing board to configure its webhook.');
+      await commit(id, [{ type: 'board.update', payload: { id, boardId: id, webhookUrl } }]);
     },
 
     deleteBoard: async (id) => {
@@ -286,6 +303,9 @@ export const useFlowStore = create<FlowState>((set, get) => {
       const nextColumns = state.columns.filter((c) => c.boardId !== id);
       const nextCards = state.cards.filter((c) => c.boardId !== id);
       await db.delete('boards', id);
+      notifyWebhook(state.boards.find(b => b.id === id)?.webhookUrl, [
+        sync.createOp(id, 'board.remove', { id, boardId: id }, 0),
+      ]);
       await db.delete('boardCreds', id);
       const nextActive = state.activeBoardId === id ? nextBoards[0]?.id || null : state.activeBoardId;
       if (state.activeBoardId === id) {

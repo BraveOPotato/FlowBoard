@@ -12,6 +12,7 @@ import { BoardView } from './views/BoardView.tsx';
 import { DEFAULT_FILTERS, planMove } from './utils.ts';
 import { App } from './App.tsx';
 import { boardIdFromPath, boardPath, setBoardUrl } from './boardRouting.ts';
+import { checkWebhooks } from './webhook.check.ts';
 
 const results: string[] = [];
 const assert = (value: unknown, message: string) => { if (!value) throw new Error(message); };
@@ -125,6 +126,7 @@ async function run() {
   await syncA();
   equal(a.useFlowStore.getState().cards[0].title, 'Edited on B', 'remote edit reaches A');
   results.push('Two isolated devices: create, join, edit, push and pull');
+  results.push(await checkWebhooks(load));
 
   const creds = (await a.sync.getBoardCreds(boardId))!;
   const call = async (path: string, body: object = {}) => {
@@ -370,15 +372,20 @@ async function run() {
 
   const beforeSettingsUi = settingsStore.getState();
   let savedSettings: { workerUrl: string; syncInterval: number } | undefined;
-  settingsStore.setState({ boards: [upgradeBoard], activeBoardId: upgradeId,
-    saveSettings: async value => { savedSettings = value; } });
+  let savedWebhook: { boardId: string; url: string } | undefined;
+  settingsStore.setState({ boards: [upgradeBoard, { id: 'other-webhook-board', name: 'Other board', createdAt: 2, webhookUrl: 'https://other.example.test/hook' }], activeBoardId: upgradeId,
+    saveSettings: async value => { savedSettings = value; },
+    saveBoardWebhook: async (boardId, url) => {
+      if (url === 'invalid') throw new Error('Enter a full HTTP or HTTPS webhook URL.');
+      savedWebhook = { boardId, url };
+    } });
   const settingsHost = document.createElement('div');
   document.body.append(settingsHost);
   const settingsRoot = createRoot(settingsHost);
   try {
     flushSync(() => settingsRoot.render(createElement(SettingsModal)));
     const tabs = [...settingsHost.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
-    equal(tabs.map(t => t.textContent), ['General', 'Boards', 'Backup'], 'only the three supported settings tabs remain');
+    equal(tabs.map(t => t.textContent), ['General', 'Boards', 'Webhook', 'Backup'], 'settings include the board webhook tab');
     const tab = (name: string) => tabs.find(t => t.textContent === name)!;
     const panel = (name: string) => document.getElementById(tab(name).getAttribute('aria-controls')!)!;
     const selectTab = (name: string) => flushSync(() => tab(name).click());
@@ -403,7 +410,7 @@ async function run() {
     assert(!panel('Backup').hidden && panel('General').hidden, 'Backup shows only backup tools');
     assert(panel('Backup').textContent?.includes('Export JSON') && panel('Backup').textContent?.includes('Import JSON'), 'backup actions are available');
     assert(![...settingsHost.querySelectorAll('button')].some(b => b.textContent === 'Save settings'), 'Save settings belongs to General');
-    for (const [key, expected] of [['Home', 'General'], ['ArrowLeft', 'Backup'], ['ArrowRight', 'General'], ['End', 'Backup'], ['ArrowLeft', 'Boards']]) {
+    for (const [key, expected] of [['Home', 'General'], ['ArrowLeft', 'Backup'], ['ArrowRight', 'General'], ['End', 'Backup'], ['ArrowLeft', 'Webhook'], ['ArrowLeft', 'Boards']]) {
       const current = tabs.find(t => t.getAttribute('aria-selected') === 'true')!;
       flushSync(() => current.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })));
       assert(tab(expected).getAttribute('aria-selected') === 'true' && document.activeElement === tab(expected), `${key} selects and focuses the correct tab`);
@@ -415,6 +422,43 @@ async function run() {
     [...settingsHost.querySelectorAll('button')].find(b => b.textContent === 'Save settings')!.click();
     await new Promise(resolve => setTimeout(resolve, 0));
     equal(savedSettings, { workerUrl: 'https://worker.example.test', syncInterval: 60 }, 'General saves its preserved form values');
+    selectTab('Webhook');
+    const webhookField = settingsHost.querySelector<HTMLInputElement>('#webhook-url')!;
+    const webhookBoard = settingsHost.querySelector<HTMLSelectElement>('#webhook-board')!;
+    equal(webhookBoard.value, upgradeId, 'Webhook starts with the active board');
+    const enterWebhook = (value: string) => flushSync(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(webhookField, value);
+      webhookField.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const chooseBoard = (id: string) => flushSync(() => {
+      webhookBoard.value = id;
+      webhookBoard.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const saveWebhook = async () => {
+      [...settingsHost.querySelectorAll('button')].find(b => b.textContent === 'Save webhook')!.click();
+      await new Promise(resolve => setTimeout(resolve, 0));
+    };
+    enterWebhook('https://example.test/draft');
+    selectTab('Boards');
+    selectTab('Webhook');
+    equal(webhookField.value, 'https://example.test/draft', 'tab switches preserve the webhook draft');
+    chooseBoard('other-webhook-board');
+    equal(webhookField.value, 'https://other.example.test/hook', 'board selector loads that board’s URL');
+    chooseBoard(upgradeId);
+    equal(webhookField.value, 'https://example.test/draft', 'board switches preserve independent drafts');
+    enterWebhook('invalid');
+    await saveWebhook();
+    assert(panel('Webhook').querySelector('[role="alert"]')?.textContent?.includes('HTTP or HTTPS'), 'invalid URL shows an inline error');
+    assert(webhookField.getAttribute('aria-invalid') === 'true', 'URL error is accessible');
+    enterWebhook('https://example.test/hook');
+    await saveWebhook();
+    equal(savedWebhook, { boardId: upgradeId, url: 'https://example.test/hook' }, 'Webhook saves the selected board separately from worker settings');
+    enterWebhook('');
+    await saveWebhook();
+    equal(savedWebhook, { boardId: upgradeId, url: '' }, 'Webhook can be disabled with a blank URL');
+    flushSync(() => settingsStore.setState({ boards: [], activeBoardId: null }));
+    assert(panel('Webhook').textContent?.includes('Create or join a board'), 'empty state explains how to configure a webhook');
+    assert(![...settingsHost.querySelectorAll('button')].some(b => b.textContent === 'Save webhook'), 'no webhook save without a board');
     assert(!/Repair this board|Sync recovery|Use this device|Use cloud|Overwrite import/.test(settingsHost.textContent ?? ''), 'repair controls are removed from every panel');
     equal(settingsHost.querySelectorAll('input[type="file"]').length, 1, 'only the additive import picker remains');
   } finally {
@@ -422,7 +466,7 @@ async function run() {
     settingsHost.remove();
     settingsStore.setState(beforeSettingsUi, true);
   }
-  results.push('Settings without repair: three tabs, keyboard navigation, labelled panels, preserved drafts, General save and normal backups');
+  results.push('Settings: four tabs, keyboard navigation, labelled panels, preserved drafts, General save and normal backups');
 
   // Keep the real board at the drop position while a local write is deliberately held open.
   const savedUiState = settingsStore.getState();
